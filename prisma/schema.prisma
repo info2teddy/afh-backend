@@ -1,0 +1,293 @@
+// prisma/schema.prisma
+// Mirrors schema.sql. Run `npx prisma migrate dev` to create the actual tables.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                     String   @id @default(uuid())
+  name                   String
+  quickbooksRealmId      String?  @map("quickbooks_realm_id")
+  quickbooksRefreshToken String?  @map("quickbooks_refresh_token")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  homes     Home[]
+  residents Resident[]
+  employees Employee[]
+  users     User[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("manager") // admin (you, cross-tenant) | manager (client staff)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+model Home {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  name          String
+  licenseNumber String   @map("license_number")
+  address       String?
+  capacity      Int
+  qboLocationId String?  @map("qbo_location_id") // QuickBooks Location, for per-branch P&L
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  residents   Resident[]
+  employees   Employee[]              // primary home
+  assignments EmployeeHomeAssignment[] // additional homes this branch's staff float to
+  shifts      Shift[]
+
+  @@index([tenantId])
+  @@map("homes")
+}
+
+model RateSchedule {
+  id                 String   @id @default(uuid())
+  tenantId           String   @map("tenant_id")
+  homeId             String   @map("home_id")
+  careLevel          String   @map("care_level")
+  monthlyRate        Decimal  @map("monthly_rate")
+  roomAndBoardRate   Decimal  @default(0) @map("room_and_board_rate")
+  effectiveDate      DateTime @map("effective_date")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId])
+  @@unique([homeId, careLevel, effectiveDate])
+  @@map("rate_schedule")
+}
+
+model Resident {
+  id                String    @id @default(uuid())
+  tenantId          String    @map("tenant_id")
+  homeId            String    @map("home_id")
+  name              String
+  careLevel         String    @map("care_level")
+  payerType         String    @map("payer_type") // private_pay | medicaid | split
+  medicaidSplitPct  Decimal?  @map("medicaid_split_pct")
+  moveInDate        DateTime  @map("move_in_date")
+  moveOutDate       DateTime? @map("move_out_date")
+  status            String    @default("active") // active | discharging | discharged
+  qboCustomerId     String?   @map("qbo_customer_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home     Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+  @@index([tenantId])
+  @@index([homeId])
+  @@map("residents")
+}
+
+model Employee {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  homeId         String   @map("home_id")
+  name           String
+  role           String   // caregiver | resident_manager | rn_delegator | other
+  hireDate       DateTime @map("hire_date")
+  payRate        Decimal  @map("pay_rate")
+  employmentType String   @map("employment_type") // hourly | salary
+  liveIn         Boolean  @default(false) @map("live_in")
+  status         String   @default("active")
+  qboEmployeeId  String?  @map("qbo_employee_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home        Home         @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  credentials Credential[]
+  shifts      Shift[]
+  payrollLineItems PayrollLineItem[]
+  additionalHomes  EmployeeHomeAssignment[]
+  onboardingItems  EmployeeOnboardingItem[]
+
+  @@index([tenantId])
+  @@index([homeId])
+  @@map("employees")
+}
+
+// A library of onboarding requirements — seeded once per tenant from the
+// state's actual new-hire checklist (see EmployeeOnboardingItem for how these
+// get instantiated per employee). Deadlines come in three shapes:
+//   - fixed_days: a hard due date, N days after hire (e.g. background check, day 1)
+//   - gate: no fixed date, but blocks a real-world milestone (e.g. everything
+//     required "before providing unsupervised care")
+//   - conditional: only applies to some hires (e.g. NAR only if nurse
+//     delegation is needed at that home)
+model OnboardingRequirementTemplate {
+  id            String  @id @default(uuid())
+  tenantId      String  @map("tenant_id")
+  name          String
+  deadlineType  String  @map("deadline_type") // fixed_days | gate | conditional
+  deadlineDays  Int?    @map("deadline_days") // set only when deadlineType = fixed_days
+  gateName      String? @map("gate_name")     // e.g. 'before_unsupervised_care', set only when deadlineType = gate
+  isConditional Boolean @default(false) @map("is_conditional") // e.g. NAR, Dementia cert — not required for every hire
+  // Sequencing: this requirement can't be marked ready to start until the
+  // dependency is completed (e.g. fingerprint can't be scheduled until the
+  // background check clears).
+  dependsOnId   String? @map("depends_on_id")
+  sortOrder     Int     @default(0) @map("sort_order")
+
+  dependsOn OnboardingRequirementTemplate?  @relation("Dependency", fields: [dependsOnId], references: [id])
+  dependents OnboardingRequirementTemplate[] @relation("Dependency")
+  items     EmployeeOnboardingItem[]
+
+  @@index([tenantId])
+  @@map("onboarding_requirement_templates")
+}
+
+// One instance of a requirement for one specific employee, created when the
+// employee is hired (or when a conditional requirement becomes relevant).
+model EmployeeOnboardingItem {
+  id           String    @id @default(uuid())
+  tenantId     String    @map("tenant_id")
+  employeeId   String    @map("employee_id")
+  templateId   String    @map("template_id")
+  dueDate      DateTime? @map("due_date") // computed at creation for fixed_days items; null for gate/conditional until applicable
+  completedAt  DateTime? @map("completed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  employee Employee                      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  template OnboardingRequirementTemplate  @relation(fields: [templateId], references: [id])
+
+  @@index([tenantId])
+  @@index([employeeId])
+  @@unique([employeeId, templateId])
+  @@map("employee_onboarding_items")
+}
+
+// Lets a caregiver float between branches beyond their primary home, without
+// duplicating the employee record (which would break payroll and credentials).
+model EmployeeHomeAssignment {
+  id         String @id @default(uuid())
+  employeeId String @map("employee_id")
+  homeId     String @map("home_id")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  home     Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, homeId])
+  @@map("employee_home_assignments")
+}
+
+model Credential {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  employeeId     String   @map("employee_id")
+  credentialType String   @map("credential_type")
+  issueDate      DateTime @map("issue_date")
+  expirationDate DateTime @map("expiration_date")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([employeeId])
+  @@index([expirationDate])
+  @@map("credentials")
+}
+
+model Shift {
+  id                        String    @id @default(uuid())
+  tenantId                  String    @map("tenant_id")
+  employeeId                String    @map("employee_id")
+  homeId                    String    @map("home_id") // which branch this specific shift was worked at
+  clockIn                   DateTime  @map("clock_in")
+  clockOut                  DateTime? @map("clock_out")
+  shiftType                 String    @map("shift_type") // day | overnight | live_in
+  sleepTimeExcludedMinutes  Int       @default(0) @map("sleep_time_excluded_minutes")
+  sleepInterrupted          Boolean   @default(false) @map("sleep_interrupted")
+  approved                  Boolean   @default(false)
+  approvedBy                String?   @map("approved_by")
+  approvedAt                DateTime? @map("approved_at")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  home     Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([employeeId, clockIn])
+  @@map("shifts")
+}
+
+model Invoice {
+  id                 String   @id @default(uuid())
+  tenantId           String   @map("tenant_id")
+  residentId         String   @map("resident_id")
+  billingPeriodStart DateTime @map("billing_period_start")
+  billingPeriodEnd   DateTime @map("billing_period_end")
+  status             String   @default("draft") // draft | sent | paid | overdue
+  totalAmount        Decimal  @map("total_amount")
+  qboInvoiceId       String?  @map("qbo_invoice_id")
+  qboSyncToken       String?  @map("qbo_sync_token")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  resident  Resident           @relation(fields: [residentId], references: [id], onDelete: Cascade)
+  lineItems InvoiceLineItem[]
+
+  @@index([tenantId])
+  @@unique([residentId, billingPeriodStart])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id          String  @id @default(uuid())
+  invoiceId   String  @map("invoice_id")
+  description String
+  amount      Decimal
+  lineType    String  @map("line_type") // room_and_board | care_charge | medicaid_portion | private_pay_portion | adjustment
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_line_items")
+}
+
+model PayrollRun {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  payPeriodStart DateTime @map("pay_period_start")
+  payPeriodEnd   DateTime @map("pay_period_end")
+  status         String   @default("calculated") // calculated | submitted
+  totalGrossPay  Decimal? @map("total_gross_pay")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  lineItems PayrollLineItem[]
+
+  @@index([tenantId])
+  @@unique([tenantId, payPeriodStart])
+  @@map("payroll_runs")
+}
+
+model PayrollLineItem {
+  id             String  @id @default(uuid())
+  payrollRunId   String  @map("payroll_run_id")
+  employeeId     String  @map("employee_id")
+  regularHours   Decimal @default(0) @map("regular_hours")
+  overtimeHours  Decimal @default(0) @map("overtime_hours")
+  grossPay       Decimal @map("gross_pay")
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([payrollRunId])
+  @@map("payroll_line_items")
+}

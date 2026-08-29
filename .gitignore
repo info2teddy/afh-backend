@@ -1,0 +1,15 @@
+# Secrets — never commit these
+.env
+.env.local
+.env.production
+
+# Dependencies and generated files
+node_modules/
+.prisma/
+
+# Test artifacts (local test scripts run against a throwaway DB)
+test-*.js
+.tokens.json
+
+# Logs
+*.log

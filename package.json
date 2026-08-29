@@ -1,0 +1,26 @@
+{
+  "name": "afh-backend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node src/app.js",
+    "seed": "node prisma/seed.js",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.6",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.6.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "prisma": "^5.20.0"
+  }
+}
