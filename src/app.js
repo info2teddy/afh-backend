@@ -8,6 +8,7 @@ const shiftsRouter = require("./routes/shifts");
 const invoicesRouter = require("./routes/invoices");
 const payrollRouter = require("./routes/payroll");
 const quickbooksConnectRouter = require("./routes/quickbooksConnect");
+const quickbooksCallbackRouter = require("./routes/quickbooksCallback");
 const authRouter = require("./routes/auth");
 const onboardingRouter = require("./routes/onboarding");
 const tenantsRouter = require("./routes/tenants");
@@ -32,7 +33,7 @@ app.use("/auth", authRouter);
 // The QuickBooks callback runs BEFORE tenant resolution — at that point the
 // tenant is only known from the `state` param Intuit redirects back with, not
 // from a header, since the browser hitting this URL has no tenant context yet.
-app.use("/quickbooks/callback", quickbooksConnectRouter);
+app.use("/quickbooks/callback", quickbooksCallbackRouter);
 
 // Admin-only cross-tenant console — an admin browsing/switching between AFH
 // businesses has no single tenant context yet, so this does its own auth
