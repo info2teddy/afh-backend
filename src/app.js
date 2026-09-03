@@ -23,6 +23,8 @@ app.use(cors({ origin: allowedOrigin, credentials: true }));
 
 app.use(express.json());
 
+app.get("/health", (req, res) => res.json({ status: "ok" }));
+
 // Login and user creation don't require a resolved tenant — they're how a
 // tenant context gets established in the first place.
 app.use("/auth", authRouter);
@@ -48,8 +50,6 @@ app.use("/invoices", invoicesRouter);
 app.use("/payroll", payrollRouter);
 app.use("/onboarding", onboardingRouter);
 app.use("/care-plans", carePlansRouter);
-
-app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`AFH backend listening on port ${PORT}`));
