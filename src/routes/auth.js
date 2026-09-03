@@ -42,7 +42,51 @@ router.post("/login", loginLimiter, async (req, res) => {
     { expiresIn: TOKEN_EXPIRY }
   );
 
-  res.json({ token, user: { id: user.id, email: user.email, role: user.role, tenantId: user.tenantId } });
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: user.tenantId },
+    select: { id: true, name: true },
+  });
+
+  res.json({
+    token,
+    user: { id: user.id, email: user.email, role: user.role, tenantId: user.tenantId },
+    tenant,
+  });
+});
+
+// POST /auth/switch-tenant — admin-only. Re-issues a JWT scoped to a
+// different tenant so an admin can move between the AFH businesses they
+// oversee without logging out. Every other route just trusts whatever
+// tenantId is in the token, so nothing downstream needs to change.
+router.post("/switch-tenant", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ error: "Authentication required." });
+  }
+  let caller;
+  try {
+    caller = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired session." });
+  }
+  if (caller.role !== "admin") {
+    return res.status(403).json({ error: "Only admins can switch between businesses." });
+  }
+
+  const { tenantId } = req.body;
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true } });
+  if (!tenant) {
+    return res.status(404).json({ error: "Business not found." });
+  }
+
+  const newToken = jwt.sign(
+    { userId: caller.userId, tenantId: tenant.id, role: caller.role },
+    JWT_SECRET,
+    { expiresIn: TOKEN_EXPIRY }
+  );
+
+  res.json({ token: newToken, tenant });
 });
 
 // POST /auth/users — create a login for a tenant's staff. Protected: only an

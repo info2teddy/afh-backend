@@ -10,6 +10,8 @@ const payrollRouter = require("./routes/payroll");
 const quickbooksConnectRouter = require("./routes/quickbooksConnect");
 const authRouter = require("./routes/auth");
 const onboardingRouter = require("./routes/onboarding");
+const tenantsRouter = require("./routes/tenants");
+const carePlansRouter = require("./routes/carePlans");
 
 const app = express();
 
@@ -30,6 +32,11 @@ app.use("/auth", authRouter);
 // from a header, since the browser hitting this URL has no tenant context yet.
 app.use("/quickbooks/callback", quickbooksConnectRouter);
 
+// Admin-only cross-tenant console — an admin browsing/switching between AFH
+// businesses has no single tenant context yet, so this does its own auth
+// check (see routes/tenants.js) instead of going through resolveTenant.
+app.use("/tenants", tenantsRouter);
+
 // Everything below this line requires a resolved tenant.
 app.use(resolveTenant);
 
@@ -40,6 +47,7 @@ app.use("/shifts", shiftsRouter);
 app.use("/invoices", invoicesRouter);
 app.use("/payroll", payrollRouter);
 app.use("/onboarding", onboardingRouter);
+app.use("/care-plans", carePlansRouter);
 
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 

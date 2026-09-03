@@ -88,13 +88,33 @@ model Resident {
   qboCustomerId     String?   @map("qbo_customer_id")
   createdAt         DateTime  @default(now()) @map("created_at")
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home     Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
-  invoices Invoice[]
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home      Home       @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  invoices  Invoice[]
+  carePlans CarePlan[]
 
   @@index([tenantId])
   @@index([homeId])
   @@map("residents")
+}
+
+// AI-drafted care plan for a resident, for a specific date. Generated from
+// the resident's care level/payer info via the Anthropic API — see
+// routes/carePlans.js. A caregiver should review before relying on it.
+model CarePlan {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  residentId String  @map("resident_id")
+  planDate  DateTime @map("plan_date")
+  content   String   @db.Text
+  model     String   // which AI model generated this, for traceability
+  createdAt DateTime @default(now()) @map("created_at")
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([residentId])
+  @@map("care_plans")
 }
 
 model Employee {
