@@ -1,25 +1,52 @@
 // src/routes/shifts.js
 const express = require("express");
+const bcrypt = require("bcryptjs");
 const { prisma } = require("../middleware/tenant");
 const { evaluateWeeklyHours } = require("../lib/overtimeFlagging");
 const router = express.Router();
 
-// POST /shifts/clock-in — start a shift
+// GET /shifts/open — currently clocked-in employees, for the kiosk to show
+// "clock out" instead of "clock in" per employee.
+router.get("/open", async (req, res) => {
+  const shifts = await prisma.shift.findMany({
+    where: { tenantId: req.tenantId, clockOut: null },
+    select: { id: true, employeeId: true, clockIn: true, shiftType: true },
+  });
+  res.json(shifts);
+});
+
+// POST /shifts/clock-in — start a shift. Requires the employee's kiosk PIN,
+// since this is meant to be usable from a shared home tablet without a
+// manager entering their own login for every caregiver.
 router.post("/clock-in", async (req, res) => {
-  const { employeeId, shiftType } = req.body;
-  if (!employeeId || !shiftType) {
-    return res.status(400).json({ error: "employeeId and shiftType are required." });
+  const { employeeId, shiftType, pin } = req.body;
+  if (!employeeId || !shiftType || !pin) {
+    return res.status(400).json({ error: "employeeId, shiftType, and pin are required." });
   }
 
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, tenantId: req.tenantId },
   });
   if (!employee) return res.status(404).json({ error: "Employee not found." });
+  if (!employee.pinHash) {
+    return res.status(400).json({ error: "No PIN set for this employee yet — ask a manager to set one." });
+  }
+  if (!(await bcrypt.compare(pin, employee.pinHash))) {
+    return res.status(401).json({ error: "Incorrect PIN." });
+  }
+
+  const alreadyOpen = await prisma.shift.findFirst({
+    where: { tenantId: req.tenantId, employeeId, clockOut: null },
+  });
+  if (alreadyOpen) {
+    return res.status(400).json({ error: "Already clocked in." });
+  }
 
   const shift = await prisma.shift.create({
     data: {
       tenantId: req.tenantId,
       employeeId,
+      homeId: employee.homeId,
       clockIn: new Date(),
       shiftType,
     },
@@ -27,15 +54,21 @@ router.post("/clock-in", async (req, res) => {
   res.status(201).json(shift);
 });
 
-// POST /shifts/:id/clock-out — end a shift
+// POST /shifts/:id/clock-out — end a shift. Also PIN-gated, so one caregiver
+// can't clock another one out at a shared kiosk.
 router.post("/:id/clock-out", async (req, res) => {
-  const { sleepTimeExcludedMinutes, sleepInterrupted } = req.body;
+  const { sleepTimeExcludedMinutes, sleepInterrupted, pin } = req.body;
+  if (!pin) return res.status(400).json({ error: "pin is required." });
 
   const shift = await prisma.shift.findFirst({
     where: { id: req.params.id, tenantId: req.tenantId },
+    include: { employee: true },
   });
   if (!shift) return res.status(404).json({ error: "Shift not found." });
   if (shift.clockOut) return res.status(400).json({ error: "Shift already clocked out." });
+  if (!(await bcrypt.compare(pin, shift.employee.pinHash || ""))) {
+    return res.status(401).json({ error: "Incorrect PIN." });
+  }
 
   const updated = await prisma.shift.update({
     where: { id: shift.id },

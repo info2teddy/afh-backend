@@ -1,5 +1,6 @@
 // src/routes/employees.js
 const express = require("express");
+const bcrypt = require("bcryptjs");
 const { prisma } = require("../middleware/tenant");
 const router = express.Router();
 
@@ -106,6 +107,24 @@ router.patch("/:id/link-quickbooks", async (req, res) => {
     data: { qboEmployeeId },
   });
   res.json(updated);
+});
+
+// PATCH /employees/:id/pin — a manager sets/resets this employee's clock-in
+// kiosk PIN. 4-6 digits; stored hashed, same as a password.
+router.patch("/:id/pin", async (req, res) => {
+  const { pin } = req.body;
+  if (!pin || !/^\d{4,6}$/.test(pin)) {
+    return res.status(400).json({ error: "pin must be 4-6 digits." });
+  }
+
+  const employee = await prisma.employee.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+  });
+  if (!employee) return res.status(404).json({ error: "Employee not found." });
+
+  const pinHash = await bcrypt.hash(pin, 10);
+  await prisma.employee.update({ where: { id: employee.id }, data: { pinHash } });
+  res.json({ ok: true });
 });
 
 module.exports = router;

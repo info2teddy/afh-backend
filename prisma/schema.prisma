@@ -129,6 +129,7 @@ model Employee {
   liveIn         Boolean  @default(false) @map("live_in")
   status         String   @default("active")
   qboEmployeeId  String?  @map("qbo_employee_id")
+  pinHash        String?  @map("pin_hash") // caregiver's kiosk clock-in/out PIN, set by a manager
   createdAt      DateTime @default(now()) @map("created_at")
 
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
