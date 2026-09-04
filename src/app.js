@@ -26,13 +26,6 @@ app.use(express.json());
 
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
-// Temporary — reports this server's outbound public IP, for Intuit's
-// "where is your app hosted" production-app disclosure form. Remove after use.
-app.get("/debug/outbound-ip", async (req, res) => {
-  const ip = await fetch("https://api.ipify.org").then((r) => r.text());
-  res.type("text/plain").send(ip);
-});
-
 // Login and user creation don't require a resolved tenant — they're how a
 // tenant context gets established in the first place.
 app.use("/auth", authRouter);
