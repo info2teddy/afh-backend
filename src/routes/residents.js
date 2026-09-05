@@ -76,6 +76,38 @@ router.post("/", async (req, res) => {
   res.status(201).json(resident);
 });
 
+// GET /residents/:id/notes — freeform staff notes, newest first
+router.get("/:id/notes", async (req, res) => {
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const notes = await prisma.residentNote.findMany({
+    where: { residentId: resident.id, tenantId: req.tenantId },
+    include: { author: { select: { email: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json(notes);
+});
+
+// POST /residents/:id/notes — add a note, attributed to the logged-in user
+router.post("/:id/notes", async (req, res) => {
+  const { content } = req.body;
+  if (!content?.trim()) return res.status(400).json({ error: "content is required." });
+
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const note = await prisma.residentNote.create({
+    data: { tenantId: req.tenantId, residentId: resident.id, authorId: req.userId, content: content.trim() },
+    include: { author: { select: { email: true } } },
+  });
+  res.status(201).json(note);
+});
+
 // PATCH /residents/:id/link-quickbooks — link this resident to an existing
 // QuickBooks Customer, done once during onboarding or when a resident moves in.
 router.patch("/:id/link-quickbooks", async (req, res) => {

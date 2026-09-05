@@ -34,6 +34,7 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  residentNotes ResidentNote[]
 
   @@index([tenantId])
   @@map("users")
@@ -96,6 +97,7 @@ model Resident {
   home      Home       @relation(fields: [homeId], references: [id], onDelete: Cascade)
   invoices  Invoice[]
   carePlans CarePlan[]
+  notes     ResidentNote[]
 
   @@index([tenantId])
   @@index([homeId])
@@ -128,6 +130,25 @@ model CarePlan {
   @@index([tenantId])
   @@index([residentId])
   @@map("care_plans")
+}
+
+// Freeform staff notes on a resident — the one part of the "resident 360"
+// profile with no natural home elsewhere (unlike care plans, invoices, or
+// credentials, which already have their own models).
+model ResidentNote {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  residentId String   @map("resident_id")
+  authorId   String   @map("author_id")
+  content    String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+  author   User     @relation(fields: [authorId], references: [id])
+
+  @@index([tenantId])
+  @@index([residentId])
+  @@map("resident_notes")
 }
 
 model Employee {

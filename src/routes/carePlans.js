@@ -96,6 +96,21 @@ router.get("/", async (req, res) => {
   res.json(plans);
 });
 
+// GET /care-plans/:id/document — the raw uploaded reference document for one
+// generation, for the resident profile's Documents tab.
+router.get("/:id/document", async (req, res) => {
+  const plan = await prisma.carePlan.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+    select: { sourceDocumentName: true, sourceDocumentMimeType: true, sourceDocumentData: true },
+  });
+  if (!plan || !plan.sourceDocumentData) {
+    return res.status(404).json({ error: "No document found for this care plan." });
+  }
+  res.set("Content-Type", plan.sourceDocumentMimeType || "application/octet-stream");
+  res.set("Content-Disposition", `inline; filename="${plan.sourceDocumentName || "document"}"`);
+  res.send(plan.sourceDocumentData);
+});
+
 router.post("/generate", upload.single("document"), async (req, res) => {
   if (!ANTHROPIC_API_KEY) {
     return res.status(503).json({
