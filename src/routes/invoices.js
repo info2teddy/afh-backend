@@ -141,6 +141,19 @@ router.patch("/:id/push-to-quickbooks", async (req, res) => {
   }
 });
 
+// DELETE /invoices/:id — draft only. Once an invoice has been sent or pushed
+// to QuickBooks it's a real record elsewhere and shouldn't just disappear;
+// draft is the only status that's still purely internal.
+router.delete("/:id", async (req, res) => {
+  const invoice = await prisma.invoice.findFirst({ where: { id: req.params.id, tenantId: req.tenantId } });
+  if (!invoice) return res.status(404).json({ error: "Invoice not found." });
+  if (invoice.status !== "draft") {
+    return res.status(400).json({ error: `Only draft invoices can be deleted (this one is ${invoice.status}).` });
+  }
+  await prisma.invoice.delete({ where: { id: invoice.id } });
+  res.status(204).end();
+});
+
 function round2(n) {
   return Math.round(n * 100) / 100;
 }

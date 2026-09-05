@@ -125,4 +125,38 @@ router.post("/users", async (req, res) => {
   res.status(201).json({ id: user.id, email: user.email, role: user.role });
 });
 
+// DELETE /auth/users/:id — admin-only, e.g. removing a leftover demo/seed
+// account. Same before-tenant-middleware pattern as the routes above.
+router.delete("/users/:id", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ error: "Authentication required." });
+  }
+  let caller;
+  try {
+    caller = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired session." });
+  }
+  if (caller.role !== "admin") {
+    return res.status(403).json({ error: "Only admins can delete user accounts." });
+  }
+  if (caller.userId === req.params.id) {
+    return res.status(400).json({ error: "You can't delete your own account while logged in as it." });
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+  if (!user) return res.status(404).json({ error: "User not found." });
+
+  try {
+    await prisma.user.delete({ where: { id: user.id } });
+  } catch (err) {
+    // Foreign-key constraint (e.g. this user authored resident notes) — surface
+    // a clear message instead of a raw 500.
+    return res.status(409).json({ error: "This account has related records (e.g. notes) and can't be deleted." });
+  }
+  res.status(204).end();
+});
+
 module.exports = router;
