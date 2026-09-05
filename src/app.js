@@ -1,5 +1,13 @@
 // src/app.js
 const express = require("express");
+// Must load before any router is required: it patches Express's route/router
+// methods so a rejected promise from an async handler reaches the error
+// middleware below via next(err), instead of becoming an unhandled promise
+// rejection — which, on Node 15+, terminates the whole process (verified:
+// a duplicate payroll run for an already-run period threw an uncaught
+// Prisma unique-constraint error and took the entire server down for every
+// tenant, not just that one request).
+require("express-async-errors");
 const cors = require("cors");
 const { resolveTenant } = require("./middleware/tenant");
 const residentsRouter = require("./routes/residents");
@@ -61,6 +69,16 @@ app.use("/expenses", expensesRouter);
 app.use("/finance", financeRouter);
 app.use("/analytics", analyticsRouter);
 app.use("/alerts", alertsRouter);
+
+// Final safety net — catches anything a route didn't handle itself (now
+// reachable thanks to express-async-errors above) so a bug in one request
+// returns a clean 500 to that caller instead of crashing every tenant's
+// connection to the process.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error(`Unhandled error on ${req.method} ${req.originalUrl}:`, err);
+  res.status(500).json({ error: "Something went wrong on our end. Please try again." });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`AFH backend listening on port ${PORT}`));

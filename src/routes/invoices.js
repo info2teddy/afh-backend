@@ -31,6 +31,13 @@ router.post("/generate", async (req, res) => {
   });
   if (!resident) return res.status(404).json({ error: "Resident not found." });
 
+  const existingInvoice = await prisma.invoice.findFirst({
+    where: { residentId, billingPeriodStart: new Date(periodStart) },
+  });
+  if (existingInvoice) {
+    return res.status(409).json({ error: "An invoice already exists for this resident and billing period." });
+  }
+
   const rate = await prisma.rateSchedule.findFirst({
     where: {
       tenantId: req.tenantId,

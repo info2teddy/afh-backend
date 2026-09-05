@@ -62,6 +62,13 @@ router.post("/runs", async (req, res) => {
   const start = new Date(periodStart);
   const end = new Date(periodEnd);
 
+  const existingRun = await prisma.payrollRun.findFirst({
+    where: { tenantId: req.tenantId, payPeriodStart: start },
+  });
+  if (existingRun) {
+    return res.status(409).json({ error: "A payroll run already exists for this pay period." });
+  }
+
   const employees = await prisma.employee.findMany({
     where: { tenantId: req.tenantId, status: "active" },
     include: { home: true },
