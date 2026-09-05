@@ -116,7 +116,17 @@ router.get("/employees/:employeeId/week", async (req, res) => {
     }))
   );
 
-  res.json({ employee: { id: employee.id, name: employee.name }, shiftIds: shifts.map((s) => s.id), ...evaluated });
+  // Without this, the approval screen has no way to know a week was already
+  // approved once the page reloads — evaluateWeeklyHours only computes hours,
+  // it doesn't know about the `approved` column on each shift.
+  const approved = shifts.length > 0 && shifts.every((s) => s.approved);
+
+  res.json({
+    employee: { id: employee.id, name: employee.name },
+    shiftIds: shifts.map((s) => s.id),
+    approved,
+    ...evaluated,
+  });
 });
 
 // POST /shifts/approve — mark a batch of shifts approved by a manager
