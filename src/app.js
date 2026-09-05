@@ -17,6 +17,7 @@ const homesRouter = require("./routes/homes");
 const expensesRouter = require("./routes/expenses");
 const financeRouter = require("./routes/finance");
 const analyticsRouter = require("./routes/analytics");
+const alertsRouter = require("./routes/alerts");
 
 const app = express();
 
@@ -59,6 +60,7 @@ app.use("/care-plans", carePlansRouter);
 app.use("/expenses", expensesRouter);
 app.use("/finance", financeRouter);
 app.use("/analytics", analyticsRouter);
+app.use("/alerts", alertsRouter);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`AFH backend listening on port ${PORT}`));
