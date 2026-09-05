@@ -31,7 +31,18 @@ router.get("/:id", async (req, res) => {
 
 // POST /residents — create a resident under the current tenant
 router.post("/", async (req, res) => {
-  const { homeId, name, careLevel, payerType, medicaidSplitPct, moveInDate } = req.body;
+  const {
+    homeId,
+    name,
+    careLevel,
+    payerType,
+    medicaidSplitPct,
+    moveInDate,
+    dateOfBirth,
+    room,
+    nextAssessmentDate,
+    authorizationStatus,
+  } = req.body;
 
   if (!homeId || !name || !careLevel || !payerType || !moveInDate) {
     return res.status(400).json({ error: "Missing required resident fields." });
@@ -55,6 +66,10 @@ router.post("/", async (req, res) => {
       payerType,
       medicaidSplitPct: medicaidSplitPct ?? null,
       moveInDate: new Date(moveInDate),
+      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+      room: room || null,
+      nextAssessmentDate: nextAssessmentDate ? new Date(nextAssessmentDate) : null,
+      authorizationStatus: authorizationStatus || null,
     },
   });
 

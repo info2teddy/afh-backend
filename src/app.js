@@ -13,6 +13,7 @@ const authRouter = require("./routes/auth");
 const onboardingRouter = require("./routes/onboarding");
 const tenantsRouter = require("./routes/tenants");
 const carePlansRouter = require("./routes/carePlans");
+const homesRouter = require("./routes/homes");
 
 const app = express();
 
@@ -45,6 +46,7 @@ app.use(resolveTenant);
 
 app.use("/quickbooks", quickbooksConnectRouter); // covers /quickbooks/connect
 app.use("/residents", residentsRouter);
+app.use("/homes", homesRouter);
 app.use("/employees", employeesRouter);
 app.use("/shifts", shiftsRouter);
 app.use("/invoices", invoicesRouter);

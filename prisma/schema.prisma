@@ -86,6 +86,10 @@ model Resident {
   moveOutDate       DateTime? @map("move_out_date")
   status            String    @default("active") // active | discharging | discharged
   qboCustomerId     String?   @map("qbo_customer_id")
+  dateOfBirth       DateTime? @map("date_of_birth")
+  room              String?
+  nextAssessmentDate DateTime? @map("next_assessment_date")
+  authorizationStatus String? @map("authorization_status") // pending | approved | denied — Medicaid/payer authorization, independent of `status`
   createdAt         DateTime  @default(now()) @map("created_at")
 
   tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
