@@ -15,6 +15,12 @@ model Tenant {
   name                   String
   quickbooksRealmId      String?  @map("quickbooks_realm_id")
   quickbooksRefreshToken String?  @map("quickbooks_refresh_token")
+  // { [expenseCategory]: { accountId, accountName } } — which QBO expense
+  // account each app-level expense category posts to.
+  qboExpenseCategoryMap  Json?    @map("qbo_expense_category_map")
+  // { [paymentMethod]: { accountId, accountName, paymentType } } — which QBO
+  // bank/credit-card account (and Purchase.PaymentType) each payment method maps to.
+  qboPaymentAccountMap   Json?    @map("qbo_payment_account_map")
   createdAt              DateTime @default(now()) @map("created_at")
 
   homes     Home[]
@@ -368,6 +374,7 @@ model Expense {
   receiptMimeType String?  @map("receipt_mime_type")
   receiptData     Bytes?   @map("receipt_data")
   qboSynced       Boolean  @default(false) @map("qbo_synced")
+  qboPurchaseId   String?  @map("qbo_purchase_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)

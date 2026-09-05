@@ -5,11 +5,20 @@
 // back (that one runs BEFORE tenant resolution — see app.js for why).
 
 const express = require("express");
+const { prisma } = require("../middleware/tenant");
+const { getValidAccessToken } = require("../lib/quickbooksAuth");
+const { fetchAccounts } = require("../lib/quickbooksClient");
+const { EXPENSE_CATEGORIES, PAYMENT_METHODS } = require("../lib/expenseConstants");
 const router = express.Router();
 
 const QBO_CLIENT_ID = process.env.QBO_CLIENT_ID;
 const QBO_REDIRECT_URI = process.env.QBO_REDIRECT_URI; // e.g. https://yourapp.com/quickbooks/callback
 const QBO_AUTH_BASE = "https://appcenter.intuit.com/connect/oauth2";
+
+// Account types that make sense as an expense-category target vs. a
+// payment-source target — QBO's chart of accounts mixes both together.
+const EXPENSE_ACCOUNT_TYPES = new Set(["Expense", "Other Expense", "Cost of Goods Sold"]);
+const PAYMENT_ACCOUNT_TYPES = new Set(["Bank", "Credit Card"]);
 
 // GET /quickbooks/connect — the "Connect QuickBooks" button in the client's
 // settings screen hits this. req.tenantId is already resolved by the tenant
@@ -37,6 +46,61 @@ router.get("/connect", (req, res) => {
 // QuickBooks OAuth flow, for the Settings screen to reflect.
 router.get("/status", (req, res) => {
   res.json({ connected: !!req.tenant.quickbooksRealmId });
+});
+
+// GET /quickbooks/accounts — this tenant's QuickBooks chart of accounts,
+// split into expense accounts (candidates for category mapping) and
+// bank/credit-card accounts (candidates for payment-method mapping), for the
+// Settings → QuickBooks mapping UI to populate its dropdowns from.
+router.get("/accounts", async (req, res) => {
+  if (!req.tenant.quickbooksRealmId) {
+    return res.status(400).json({ error: "Connect QuickBooks first." });
+  }
+  try {
+    const accounts = await fetchAccounts(req.tenant.quickbooksRealmId, () => getValidAccessToken(req.tenantId));
+    res.json({
+      expenseAccounts: accounts
+        .filter((a) => EXPENSE_ACCOUNT_TYPES.has(a.AccountType))
+        .map((a) => ({ id: a.Id, name: a.Name })),
+      paymentAccounts: accounts
+        .filter((a) => PAYMENT_ACCOUNT_TYPES.has(a.AccountType))
+        .map((a) => ({ id: a.Id, name: a.Name, accountType: a.AccountType })),
+    });
+  } catch (err) {
+    console.error("Failed to fetch QuickBooks accounts:", err);
+    res.status(502).json({ error: "Could not load QuickBooks accounts. Try again shortly." });
+  }
+});
+
+// GET /quickbooks/mappings — this tenant's expense-category → account and
+// payment-method → account mappings, alongside the fixed lists the app
+// supports, so the UI can render one row per category/method regardless of
+// what's already been mapped.
+router.get("/mappings", (req, res) => {
+  res.json({
+    categories: EXPENSE_CATEGORIES,
+    paymentMethods: PAYMENT_METHODS,
+    categoryMap: req.tenant.qboExpenseCategoryMap || {},
+    paymentAccountMap: req.tenant.qboPaymentAccountMap || {},
+  });
+});
+
+// PUT /quickbooks/mappings — body: { categoryMap, paymentAccountMap }
+// categoryMap: { [category]: { accountId, accountName } }
+// paymentAccountMap: { [paymentMethod]: { accountId, accountName, paymentType } }
+router.put("/mappings", async (req, res) => {
+  const { categoryMap, paymentAccountMap } = req.body;
+  const updated = await prisma.tenant.update({
+    where: { id: req.tenantId },
+    data: {
+      ...(categoryMap !== undefined ? { qboExpenseCategoryMap: categoryMap } : {}),
+      ...(paymentAccountMap !== undefined ? { qboPaymentAccountMap: paymentAccountMap } : {}),
+    },
+  });
+  res.json({
+    categoryMap: updated.qboExpenseCategoryMap || {},
+    paymentAccountMap: updated.qboPaymentAccountMap || {},
+  });
 });
 
 function randomNonce() {

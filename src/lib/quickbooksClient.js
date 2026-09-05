@@ -68,8 +68,40 @@ async function pushTimeActivity(realmId, getAccessToken, shift) {
   return { qboTimeActivityId: result.TimeActivity.Id };
 }
 
+// Chart of accounts, for the expense-category / payment-account mapping UI.
+async function fetchAccounts(realmId, getAccessToken) {
+  const query = encodeURIComponent("SELECT Id, Name, AccountType FROM Account WHERE Active = true MAXRESULTS 1000");
+  const result = await qboRequest(realmId, getAccessToken, `/query?query=${query}&minorversion=65`);
+  return result.QueryResponse?.Account || [];
+}
+
+// purchase: { paymentType, paymentAccountId, categoryAccountId, amount, date, description, internalExpenseId }
+async function pushPurchase(realmId, getAccessToken, purchase) {
+  const payload = {
+    PaymentType: purchase.paymentType, // Cash | Check | CreditCard
+    AccountRef: { value: purchase.paymentAccountId }, // the account the money came out of
+    TxnDate: purchase.date,
+    PrivateNote: `AFH-system expense ref: ${purchase.internalExpenseId}`,
+    Line: [
+      {
+        Amount: round2(purchase.amount),
+        DetailType: "AccountBasedExpenseLineDetail",
+        Description: purchase.description,
+        AccountBasedExpenseLineDetail: { AccountRef: { value: purchase.categoryAccountId } },
+      },
+    ],
+  };
+
+  const result = await qboRequest(realmId, getAccessToken, "/purchase?minorversion=65", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  return { qboPurchaseId: result.Purchase.Id };
+}
+
 function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
-module.exports = { pushInvoice, pushTimeActivity };
+module.exports = { pushInvoice, pushTimeActivity, pushPurchase, fetchAccounts };

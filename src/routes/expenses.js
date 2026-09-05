@@ -6,6 +6,9 @@
 const express = require("express");
 const multer = require("multer");
 const { prisma } = require("../middleware/tenant");
+const { getValidAccessToken } = require("../lib/quickbooksAuth");
+const { pushPurchase } = require("../lib/quickbooksClient");
+const { EXPENSE_CATEGORIES } = require("../lib/expenseConstants");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -101,8 +104,6 @@ router.get("/:id/receipt", async (req, res) => {
   res.send(expense.receiptData);
 });
 
-const EXPENSE_CATEGORIES = ["Food & Supplies", "Rent", "Utilities", "Medical Supplies", "Insurance", "Other"];
-
 // POST /expenses/extract-receipt — AI-assisted prefill, doesn't save anything.
 // The frontend shows the extracted fields for the user to review/edit before
 // submitting the real POST /expenses.
@@ -157,6 +158,58 @@ If a field isn't legible or present, use null for it (except category — pick y
     res.json(extracted);
   } catch (err) {
     res.status(502).json({ error: `Receipt scan failed: ${err.message}` });
+  }
+});
+
+// POST /expenses/:id/sync — push one expense to QuickBooks as a Purchase.
+// Requires the tenant to have connected QuickBooks and mapped this expense's
+// category + payment method under Settings → QuickBooks first (see
+// quickbooksConnect.js's /mappings routes) — there's no sensible default
+// account to fall back to, so this fails loudly instead of guessing.
+router.post("/:id/sync", async (req, res) => {
+  const expense = await prisma.expense.findFirst({ where: { id: req.params.id, tenantId: req.tenantId } });
+  if (!expense) return res.status(404).json({ error: "Expense not found." });
+  if (expense.qboSynced) return res.status(400).json({ error: "This expense has already been synced." });
+
+  if (!req.tenant.quickbooksRealmId) {
+    return res.status(400).json({ error: "Connect QuickBooks in Settings before syncing expenses." });
+  }
+
+  const categoryMap = req.tenant.qboExpenseCategoryMap || {};
+  const paymentMap = req.tenant.qboPaymentAccountMap || {};
+  const categoryAccount = categoryMap[expense.category];
+  const paymentAccount = expense.paymentMethod ? paymentMap[expense.paymentMethod] : null;
+
+  if (!categoryAccount || !paymentAccount) {
+    return res.status(400).json({
+      error: `Map the "${expense.category}" category and "${expense.paymentMethod || "unset"}" payment method to QuickBooks accounts in Settings → QuickBooks before syncing.`,
+    });
+  }
+
+  try {
+    const { qboPurchaseId } = await pushPurchase(
+      req.tenant.quickbooksRealmId,
+      () => getValidAccessToken(req.tenantId),
+      {
+        paymentType: paymentAccount.paymentType,
+        paymentAccountId: paymentAccount.accountId,
+        categoryAccountId: categoryAccount.accountId,
+        amount: Number(expense.amount),
+        date: expense.date.toISOString().slice(0, 10),
+        description: expense.vendor || expense.notes || expense.category,
+        internalExpenseId: expense.id,
+      }
+    );
+
+    const updated = await prisma.expense.update({
+      where: { id: expense.id },
+      data: { qboSynced: true, qboPurchaseId },
+      select: EXPENSE_SELECT,
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error(`QuickBooks push failed for expense ${expense.id}:`, err);
+    res.status(502).json({ error: "Could not push this expense to QuickBooks. Try again shortly." });
   }
 });
 
