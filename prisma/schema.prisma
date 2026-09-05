@@ -357,9 +357,9 @@ model PayrollLineItem {
 
 // Operating expenses CareFit captures directly (receipt + category), so
 // staff don't have to open QuickBooks just to log a $50 supply run.
-// QuickBooks stays the actual ledger — qboSynced is a placeholder for a
-// future real sync (posting a Purchase requires mapping to a QBO expense
-// account and a payment account, neither of which is wired up yet).
+// QuickBooks stays the actual ledger — qboSynced/qboPurchaseId reflect
+// whether this expense has been pushed there as a Purchase (see
+// routes/expenses.js's POST /:id/sync and Tenant's qbo*Map fields).
 model Expense {
   id              String   @id @default(uuid())
   tenantId        String   @map("tenant_id")
