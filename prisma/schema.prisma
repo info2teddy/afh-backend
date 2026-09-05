@@ -21,6 +21,7 @@ model Tenant {
   residents Resident[]
   employees Employee[]
   users     User[]
+  expenses  Expense[]
 
   @@map("tenants")
 }
@@ -55,6 +56,7 @@ model Home {
   employees   Employee[]              // primary home
   assignments EmployeeHomeAssignment[] // additional homes this branch's staff float to
   shifts      Shift[]
+  expenses    Expense[]
 
   @@index([tenantId])
   @@map("homes")
@@ -345,4 +347,33 @@ model PayrollLineItem {
 
   @@index([payrollRunId])
   @@map("payroll_line_items")
+}
+
+// Operating expenses CareFit captures directly (receipt + category), so
+// staff don't have to open QuickBooks just to log a $50 supply run.
+// QuickBooks stays the actual ledger — qboSynced is a placeholder for a
+// future real sync (posting a Purchase requires mapping to a QBO expense
+// account and a payment account, neither of which is wired up yet).
+model Expense {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  homeId          String   @map("home_id")
+  date            DateTime
+  category        String   // Food & Supplies | Rent | Utilities | Medical Supplies | Insurance | Other
+  vendor          String?
+  amount          Decimal
+  paymentMethod   String?  @map("payment_method") // business_card | check | cash | other
+  notes           String?  @db.Text
+  receiptName     String?  @map("receipt_name")
+  receiptMimeType String?  @map("receipt_mime_type")
+  receiptData     Bytes?   @map("receipt_data")
+  qboSynced       Boolean  @default(false) @map("qbo_synced")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home   Home   @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([homeId])
+  @@map("expenses")
 }
