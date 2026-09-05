@@ -75,6 +75,15 @@ async function fetchAccounts(realmId, getAccessToken) {
   return result.QueryResponse?.Account || [];
 }
 
+// Sales items (Service/NonInventory/Inventory), for the revenue line-type
+// mapping UI — which QBO Item each invoice line type (private-pay portion,
+// Medicaid portion) posts under.
+async function fetchItems(realmId, getAccessToken) {
+  const query = encodeURIComponent("SELECT Id, Name, Type FROM Item WHERE Active = true MAXRESULTS 1000");
+  const result = await qboRequest(realmId, getAccessToken, `/query?query=${query}&minorversion=65`);
+  return result.QueryResponse?.Item || [];
+}
+
 // purchase: { paymentType, paymentAccountId, categoryAccountId, amount, date, description, internalExpenseId }
 async function pushPurchase(realmId, getAccessToken, purchase) {
   const payload = {
@@ -104,4 +113,4 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
-module.exports = { pushInvoice, pushTimeActivity, pushPurchase, fetchAccounts };
+module.exports = { pushInvoice, pushTimeActivity, pushPurchase, fetchAccounts, fetchItems };

@@ -120,6 +120,14 @@ router.patch("/:id/push-to-quickbooks", async (req, res) => {
     return res.status(400).json({ error: "Resident has no linked QuickBooks customer — set one up first." });
   }
 
+  const revenueItemMap = req.tenant.qboRevenueItemMap || {};
+  const unmappedLineTypes = [...new Set(invoice.lineItems.map((li) => li.lineType).filter((t) => !revenueItemMap[t]))];
+  if (unmappedLineTypes.length > 0) {
+    return res.status(400).json({
+      error: `Map ${unmappedLineTypes.join(", ")} to a QuickBooks item in Settings → QuickBooks before pushing this invoice.`,
+    });
+  }
+
   try {
     const { qboInvoiceId, qboSyncToken } = await pushInvoice(
       req.tenant.quickbooksRealmId,
@@ -132,7 +140,7 @@ router.patch("/:id/push-to-quickbooks", async (req, res) => {
         lineItems: invoice.lineItems.map((li) => ({
           description: li.description,
           amount: Number(li.amount),
-          qboItemId: process.env.QBO_DEFAULT_ITEM_ID, // set up once per tenant during onboarding
+          qboItemId: revenueItemMap[li.lineType].itemId,
         })),
       }
     );

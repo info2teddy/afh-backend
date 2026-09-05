@@ -21,6 +21,10 @@ model Tenant {
   // { [paymentMethod]: { accountId, accountName, paymentType } } — which QBO
   // bank/credit-card account (and Purchase.PaymentType) each payment method maps to.
   qboPaymentAccountMap   Json?    @map("qbo_payment_account_map")
+  // { [invoiceLineType]: { itemId, itemName } } — which QBO Item each invoice
+  // line type (private_pay_portion, medicaid_portion) posts under, so revenue
+  // splits by payer in QuickBooks reports instead of all landing on one item.
+  qboRevenueItemMap      Json?    @map("qbo_revenue_item_map")
   createdAt              DateTime @default(now()) @map("created_at")
 
   homes     Home[]

@@ -7,8 +7,9 @@
 const express = require("express");
 const { prisma } = require("../middleware/tenant");
 const { getValidAccessToken } = require("../lib/quickbooksAuth");
-const { fetchAccounts } = require("../lib/quickbooksClient");
+const { fetchAccounts, fetchItems } = require("../lib/quickbooksClient");
 const { EXPENSE_CATEGORIES, PAYMENT_METHODS } = require("../lib/expenseConstants");
+const { REVENUE_LINE_TYPES } = require("../lib/revenueConstants");
 const router = express.Router();
 
 const QBO_CLIENT_ID = process.env.QBO_CLIENT_ID;
@@ -72,34 +73,54 @@ router.get("/accounts", async (req, res) => {
   }
 });
 
-// GET /quickbooks/mappings — this tenant's expense-category → account and
-// payment-method → account mappings, alongside the fixed lists the app
-// supports, so the UI can render one row per category/method regardless of
-// what's already been mapped.
+// GET /quickbooks/items — this tenant's QuickBooks sales items, for the
+// revenue line-type mapping UI to populate its dropdowns from.
+router.get("/items", async (req, res) => {
+  if (!req.tenant.quickbooksRealmId) {
+    return res.status(400).json({ error: "Connect QuickBooks first." });
+  }
+  try {
+    const items = await fetchItems(req.tenant.quickbooksRealmId, () => getValidAccessToken(req.tenantId));
+    res.json({ items: items.map((i) => ({ id: i.Id, name: i.Name, type: i.Type })) });
+  } catch (err) {
+    console.error("Failed to fetch QuickBooks items:", err);
+    res.status(502).json({ error: "Could not load QuickBooks items. Try again shortly." });
+  }
+});
+
+// GET /quickbooks/mappings — this tenant's expense-category → account,
+// payment-method → account, and revenue-line-type → item mappings,
+// alongside the fixed lists the app supports, so the UI can render one row
+// per category/method/line-type regardless of what's already been mapped.
 router.get("/mappings", (req, res) => {
   res.json({
     categories: EXPENSE_CATEGORIES,
     paymentMethods: PAYMENT_METHODS,
+    revenueLineTypes: REVENUE_LINE_TYPES,
     categoryMap: req.tenant.qboExpenseCategoryMap || {},
     paymentAccountMap: req.tenant.qboPaymentAccountMap || {},
+    revenueItemMap: req.tenant.qboRevenueItemMap || {},
   });
 });
 
-// PUT /quickbooks/mappings — body: { categoryMap, paymentAccountMap }
+// PUT /quickbooks/mappings — body: { categoryMap, paymentAccountMap, revenueItemMap }
 // categoryMap: { [category]: { accountId, accountName } }
 // paymentAccountMap: { [paymentMethod]: { accountId, accountName, paymentType } }
+// revenueItemMap: { [invoiceLineType]: { itemId, itemName } }
 router.put("/mappings", async (req, res) => {
-  const { categoryMap, paymentAccountMap } = req.body;
+  const { categoryMap, paymentAccountMap, revenueItemMap } = req.body;
   const updated = await prisma.tenant.update({
     where: { id: req.tenantId },
     data: {
       ...(categoryMap !== undefined ? { qboExpenseCategoryMap: categoryMap } : {}),
       ...(paymentAccountMap !== undefined ? { qboPaymentAccountMap: paymentAccountMap } : {}),
+      ...(revenueItemMap !== undefined ? { qboRevenueItemMap: revenueItemMap } : {}),
     },
   });
   res.json({
     categoryMap: updated.qboExpenseCategoryMap || {},
     paymentAccountMap: updated.qboPaymentAccountMap || {},
+    revenueItemMap: updated.qboRevenueItemMap || {},
   });
 });
 
