@@ -77,7 +77,9 @@ router.get("/", async (req, res) => {
   }
   const plans = await prisma.carePlan.findMany({
     where: { tenantId: req.tenantId, residentId },
-    orderBy: { planDate: "desc" },
+    // Same-day regenerations tie on planDate — break ties by createdAt so the
+    // most recent generation for that date always sorts first.
+    orderBy: [{ planDate: "desc" }, { createdAt: "desc" }],
     select: {
       id: true,
       residentId: true,
