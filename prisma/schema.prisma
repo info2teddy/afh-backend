@@ -110,6 +110,15 @@ model CarePlan {
   model     String   // which AI model generated this, for traceability
   createdAt DateTime @default(now()) @map("created_at")
 
+  // Optional resident-specific context supplied at generation time — free-text
+  // notes and/or one uploaded document (e.g. a physician's order, discharge
+  // summary, assessment form). Both are sent to the model as part of the
+  // prompt so the plan can reference specifics beyond care level/payer type.
+  sourceNotes             String? @db.Text @map("source_notes")
+  sourceDocumentName      String? @map("source_document_name")
+  sourceDocumentMimeType  String? @map("source_document_mime_type")
+  sourceDocumentData      Bytes?  @map("source_document_data")
+
   resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
