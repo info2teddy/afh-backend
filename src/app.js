@@ -10,6 +10,8 @@ const express = require("express");
 require("express-async-errors");
 const cors = require("cors");
 const { resolveTenant } = require("./middleware/tenant");
+const { restrictKiosk } = require("./middleware/kioskRestrict");
+const kioskRouter = require("./routes/kiosk");
 const residentsRouter = require("./routes/residents");
 const employeesRouter = require("./routes/employees");
 const shiftsRouter = require("./routes/shifts");
@@ -56,6 +58,12 @@ app.use("/tenants", tenantsRouter);
 // Everything below this line requires a resolved tenant.
 app.use(resolveTenant);
 
+// Blocks a kiosk-role token from everything except clock in/out — see
+// middleware/kioskRestrict.js. Placed once, here, so every router below
+// benefits without each needing its own kiosk check.
+app.use(restrictKiosk);
+
+app.use("/kiosk", kioskRouter);
 app.use("/quickbooks", quickbooksConnectRouter); // covers /quickbooks/connect
 app.use("/residents", residentsRouter);
 app.use("/homes", homesRouter);

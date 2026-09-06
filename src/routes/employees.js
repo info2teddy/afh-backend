@@ -4,14 +4,16 @@ const bcrypt = require("bcryptjs");
 const { prisma } = require("../middleware/tenant");
 const router = express.Router();
 
-// GET /employees — list all employees for the current tenant, with credentials
+// GET /employees — list all employees for the current tenant, with credentials.
+// pinHash is stripped below — it never needs to leave the server, and the
+// kiosk clock-in flow verifies PINs server-side (see /shifts/clock-in).
 router.get("/", async (req, res) => {
   const employees = await prisma.employee.findMany({
     where: { tenantId: req.tenantId },
     include: { credentials: true },
     orderBy: { name: "asc" },
   });
-  res.json(employees);
+  res.json(employees.map(({ pinHash, ...rest }) => rest));
 });
 
 router.get("/:id", async (req, res) => {
@@ -20,7 +22,8 @@ router.get("/:id", async (req, res) => {
     include: { credentials: true },
   });
   if (!employee) return res.status(404).json({ error: "Employee not found." });
-  res.json(employee);
+  const { pinHash, ...rest } = employee;
+  res.json(rest);
 });
 
 router.post("/", async (req, res) => {

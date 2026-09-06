@@ -11,6 +11,11 @@ const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET; // long random string, never hardcode
 const TOKEN_EXPIRY = "12h";
+// A kiosk login is meant to sit logged into a shared tablet indefinitely —
+// forcing daily re-login defeats the point. It's safe to leave long-lived
+// because kioskRestrict.js caps what that token can ever do, regardless of
+// how long it's valid for.
+const KIOSK_TOKEN_EXPIRY = "90d";
 
 // Brute-force protection: 5 login attempts per 15 minutes per IP. Successful
 // logins don't count against the limit, so normal users are unaffected.
@@ -39,7 +44,7 @@ router.post("/login", loginLimiter, async (req, res) => {
   const token = jwt.sign(
     { userId: user.id, tenantId: user.tenantId, role: user.role },
     JWT_SECRET,
-    { expiresIn: TOKEN_EXPIRY }
+    { expiresIn: user.role === "kiosk" ? KIOSK_TOKEN_EXPIRY : TOKEN_EXPIRY }
   );
 
   const tenant = await prisma.tenant.findUnique({
@@ -87,6 +92,35 @@ router.post("/switch-tenant", async (req, res) => {
   );
 
   res.json({ token: newToken, tenant });
+});
+
+// GET /auth/users?tenantId=... — list logins for a tenant (e.g. Settings'
+// "Clock-in tablet" card). Defaults to the caller's own tenant; an admin can
+// pass a different tenantId since admin accounts are cross-tenant. Same
+// before-tenant-middleware pattern as the other routes here.
+router.get("/users", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ error: "Authentication required." });
+  }
+  let caller;
+  try {
+    caller = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired session." });
+  }
+  if (caller.role !== "admin") {
+    return res.status(403).json({ error: "Only admins can view user accounts." });
+  }
+
+  const tenantId = req.query.tenantId || caller.tenantId;
+  const users = await prisma.user.findMany({
+    where: { tenantId },
+    select: { id: true, email: true, role: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+  res.json(users);
 });
 
 // POST /auth/users — create a login for a tenant's staff. Protected: only an
