@@ -94,27 +94,40 @@ router.post("/switch-tenant", async (req, res) => {
   res.json({ token: newToken, tenant });
 });
 
-// GET /auth/users?tenantId=... — list logins for a tenant (e.g. Settings'
-// "Clock-in tablet" card). Defaults to the caller's own tenant; an admin can
-// pass a different tenantId since admin accounts are cross-tenant. Same
-// before-tenant-middleware pattern as the other routes here.
-router.get("/users", async (req, res) => {
+// Shared by the three routes below, which all run before resolveTenant (an
+// admin browsing/managing other tenants has no single tenant context) and so
+// verify the caller's JWT themselves. Returns null and has already sent a
+// 401 response if verification fails.
+function verifyStaffCaller(req, res) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (!token) {
-    return res.status(401).json({ error: "Authentication required." });
+    res.status(401).json({ error: "Authentication required." });
+    return null;
   }
   let caller;
   try {
     caller = jwt.verify(token, JWT_SECRET);
   } catch {
-    return res.status(401).json({ error: "Invalid or expired session." });
+    res.status(401).json({ error: "Invalid or expired session." });
+    return null;
   }
-  if (caller.role !== "admin") {
-    return res.status(403).json({ error: "Only admins can view user accounts." });
+  if (caller.role !== "admin" && caller.role !== "manager") {
+    res.status(403).json({ error: "Only staff logins can manage user accounts." });
+    return null;
   }
+  return caller;
+}
 
-  const tenantId = req.query.tenantId || caller.tenantId;
+// GET /auth/users?tenantId=... — list logins for a tenant (e.g. Settings'
+// "Clock-in tablet" card and staff-invite UI). A manager always sees only
+// their own tenant, regardless of what tenantId they pass — only an admin
+// (cross-tenant) can browse another tenant's users.
+router.get("/users", async (req, res) => {
+  const caller = verifyStaffCaller(req, res);
+  if (!caller) return;
+
+  const tenantId = caller.role === "admin" ? req.query.tenantId || caller.tenantId : caller.tenantId;
   const users = await prisma.user.findMany({
     where: { tenantId },
     select: { id: true, email: true, role: true, createdAt: true },
@@ -123,27 +136,26 @@ router.get("/users", async (req, res) => {
   res.json(users);
 });
 
-// POST /auth/users — create a login for a tenant's staff. Protected: only an
-// authenticated admin can call this. The route lives before the tenant
-// middleware in app.js, so it does its own token verification here.
+// POST /auth/users — create a login. A manager can only invite logins into
+// their OWN tenant (tenantId is forced from their token, any value they pass
+// is ignored), and only as "manager" or "kiosk" — never "admin", which would
+// be a privilege escalation. An admin keeps full cross-tenant, any-role
+// access, since that's how CareFit itself provisions a new client's very
+// first login.
 router.post("/users", async (req, res) => {
-  // Verify the caller is a logged-in admin
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!token) {
-    return res.status(401).json({ error: "Authentication required." });
-  }
-  let caller;
-  try {
-    caller = jwt.verify(token, JWT_SECRET);
-  } catch {
-    return res.status(401).json({ error: "Invalid or expired session." });
-  }
-  if (caller.role !== "admin") {
-    return res.status(403).json({ error: "Only admins can create user accounts." });
+  const caller = verifyStaffCaller(req, res);
+  if (!caller) return;
+
+  const { email, password } = req.body;
+  let { tenantId, role } = req.body;
+
+  if (caller.role === "manager") {
+    tenantId = caller.tenantId;
+    if (role && !["manager", "kiosk"].includes(role)) {
+      return res.status(403).json({ error: "You can only create manager or clock-in-tablet logins." });
+    }
   }
 
-  const { tenantId, email, password, role } = req.body;
   if (!tenantId || !email || !password) {
     return res.status(400).json({ error: "tenantId, email, and password are required." });
   }
@@ -159,29 +171,21 @@ router.post("/users", async (req, res) => {
   res.status(201).json({ id: user.id, email: user.email, role: user.role });
 });
 
-// DELETE /auth/users/:id — admin-only, e.g. removing a leftover demo/seed
-// account. Same before-tenant-middleware pattern as the routes above.
+// DELETE /auth/users/:id — a manager can only remove logins within their own
+// tenant, and can never remove an admin account. An admin can remove any
+// user, e.g. a leftover demo/seed account.
 router.delete("/users/:id", async (req, res) => {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!token) {
-    return res.status(401).json({ error: "Authentication required." });
-  }
-  let caller;
-  try {
-    caller = jwt.verify(token, JWT_SECRET);
-  } catch {
-    return res.status(401).json({ error: "Invalid or expired session." });
-  }
-  if (caller.role !== "admin") {
-    return res.status(403).json({ error: "Only admins can delete user accounts." });
-  }
+  const caller = verifyStaffCaller(req, res);
+  if (!caller) return;
   if (caller.userId === req.params.id) {
     return res.status(400).json({ error: "You can't delete your own account while logged in as it." });
   }
 
   const user = await prisma.user.findUnique({ where: { id: req.params.id } });
   if (!user) return res.status(404).json({ error: "User not found." });
+  if (caller.role === "manager" && (user.tenantId !== caller.tenantId || user.role === "admin")) {
+    return res.status(403).json({ error: "You can only remove logins within your own business." });
+  }
 
   try {
     await prisma.user.delete({ where: { id: user.id } });
