@@ -37,4 +37,15 @@ async function resolveTenant(req, res, next) {
   next();
 }
 
-module.exports = { resolveTenant, prisma };
+// For routes an AFH owner/manager shouldn't touch at all — business setup
+// (Facilities) and the QuickBooks integration, both flagged by the user as
+// too technical/risky for a manager to configure themselves. Mounted per
+// route or per router, same pattern as restrictKiosk.
+function requireAdmin(req, res, next) {
+  if (req.userRole !== "admin") {
+    return res.status(403).json({ error: "This action is restricted to CareFit administrators." });
+  }
+  next();
+}
+
+module.exports = { resolveTenant, requireAdmin, prisma };

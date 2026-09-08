@@ -5,12 +5,17 @@
 // back (that one runs BEFORE tenant resolution — see app.js for why).
 
 const express = require("express");
-const { prisma } = require("../middleware/tenant");
+const { prisma, requireAdmin } = require("../middleware/tenant");
 const { getValidAccessToken } = require("../lib/quickbooksAuth");
 const { fetchAccounts, fetchItems } = require("../lib/quickbooksClient");
 const { EXPENSE_CATEGORIES, PAYMENT_METHODS } = require("../lib/expenseConstants");
 const { REVENUE_LINE_TYPES } = require("../lib/revenueConstants");
 const router = express.Router();
+
+// The whole QuickBooks integration — connecting it and mapping categories/
+// accounts — is admin-only (flagged by the user as too technical/risky for
+// an AFH owner to configure). Applies to every route below.
+router.use(requireAdmin);
 
 const QBO_CLIENT_ID = process.env.QBO_CLIENT_ID;
 const QBO_REDIRECT_URI = process.env.QBO_REDIRECT_URI; // e.g. https://yourapp.com/quickbooks/callback

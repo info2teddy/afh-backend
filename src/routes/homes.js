@@ -4,7 +4,7 @@
 // an operator running multiple licensed homes under one business.
 
 const express = require("express");
-const { prisma } = require("../middleware/tenant");
+const { prisma, requireAdmin } = require("../middleware/tenant");
 const router = express.Router();
 
 router.get("/", async (req, res) => {
@@ -23,7 +23,7 @@ router.get("/", async (req, res) => {
   res.json(homes);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireAdmin, async (req, res) => {
   const { name, licenseNumber, address, capacity } = req.body;
   if (!name || !licenseNumber || !capacity) {
     return res.status(400).json({ error: "name, licenseNumber, and capacity are required." });
@@ -35,7 +35,7 @@ router.post("/", async (req, res) => {
   res.status(201).json(home);
 });
 
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireAdmin, async (req, res) => {
   const home = await prisma.home.findFirst({ where: { id: req.params.id, tenantId: req.tenantId } });
   if (!home) return res.status(404).json({ error: "Home not found." });
 
