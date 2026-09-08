@@ -33,16 +33,9 @@ function addDays(date, days) {
   return d;
 }
 
-// POST /onboarding/seed-templates — run once per tenant (or re-run safely;
-// it's idempotent by name) to set up the requirement library.
-router.post("/seed-templates", async (req, res) => {
-  const existing = await prisma.onboardingRequirementTemplate.findMany({
-    where: { tenantId: req.tenantId },
-  });
-  if (existing.length > 0) {
-    return res.status(409).json({ error: "Templates already seeded for this tenant.", count: existing.length });
-  }
-
+// Shared by the manual seed endpoint below and instantiate's lazy fallback.
+// Assumes the caller already checked no templates exist for this tenant.
+async function seedTemplatesForTenant(tenantId) {
   const idsByName = {};
   // Insert non-dependent templates first, then dependent ones, so dependsOnId can resolve
   const withoutDeps = CHECKLIST_TEMPLATES.filter((t) => !t.dependsOnName);
@@ -51,7 +44,7 @@ router.post("/seed-templates", async (req, res) => {
   for (const t of withoutDeps) {
     const created = await prisma.onboardingRequirementTemplate.create({
       data: {
-        tenantId: req.tenantId,
+        tenantId,
         name: t.name,
         deadlineType: t.deadlineType,
         deadlineDays: t.deadlineDays ?? null,
@@ -65,7 +58,7 @@ router.post("/seed-templates", async (req, res) => {
   for (const t of withDeps) {
     const created = await prisma.onboardingRequirementTemplate.create({
       data: {
-        tenantId: req.tenantId,
+        tenantId,
         name: t.name,
         deadlineType: t.deadlineType,
         deadlineDays: t.deadlineDays ?? null,
@@ -76,7 +69,22 @@ router.post("/seed-templates", async (req, res) => {
     idsByName[t.name] = created.id;
   }
 
-  res.status(201).json({ seeded: Object.keys(idsByName).length });
+  return Object.keys(idsByName).length;
+}
+
+// POST /onboarding/seed-templates — kept for manual/admin use, but no longer
+// load-bearing for normal operation: instantiate (below) seeds automatically
+// the first time it's needed, so a new tenant never has to know this exists.
+router.post("/seed-templates", async (req, res) => {
+  const existing = await prisma.onboardingRequirementTemplate.findMany({
+    where: { tenantId: req.tenantId },
+  });
+  if (existing.length > 0) {
+    return res.status(409).json({ error: "Templates already seeded for this tenant.", count: existing.length });
+  }
+
+  const seeded = await seedTemplatesForTenant(req.tenantId);
+  res.status(201).json({ seeded });
 });
 
 // POST /employees/:employeeId/onboarding/instantiate — run once when an
@@ -87,12 +95,20 @@ router.post("/employees/:employeeId/instantiate", async (req, res) => {
   });
   if (!employee) return res.status(404).json({ error: "Employee not found." });
 
+  // A tenant's requirement library is seeded lazily, the first time anyone
+  // actually needs it, rather than requiring a separate manual setup step
+  // (or a raw "call /onboarding/seed-templates first" error) that a new
+  // business owner would have no way to know about.
+  const templateCount = await prisma.onboardingRequirementTemplate.count({
+    where: { tenantId: req.tenantId },
+  });
+  if (templateCount === 0) {
+    await seedTemplatesForTenant(req.tenantId);
+  }
+
   const templates = await prisma.onboardingRequirementTemplate.findMany({
     where: { tenantId: req.tenantId, isConditional: false },
   });
-  if (templates.length === 0) {
-    return res.status(400).json({ error: "No requirement templates seeded yet — call /onboarding/seed-templates first." });
-  }
 
   const items = templates.map((t) => ({
     tenantId: req.tenantId,
