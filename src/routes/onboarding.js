@@ -16,7 +16,11 @@ const CHECKLIST_TEMPLATES = [
   { name: "Facility Orientation", deadlineType: "gate", gateName: "before_routine_interaction", sortOrder: 6 },
   { name: "Background check (satisfactory result)", deadlineType: "gate", gateName: "before_unsupervised_care", sortOrder: 7 },
   { name: "CPR and First Aid card (hands-on only)", deadlineType: "gate", gateName: "before_unsupervised_care", sortOrder: 8 },
-  { name: "75-hour Basic Training Certificate", deadlineType: "fixed_days", deadlineDays: 120, sortOrder: 9 },
+  // Also gates unsupervised care on the paper checklist (same section as
+  // Background check/CPR&First Aid) in addition to its own 120-day deadline
+  // — kept as fixed_days since deadlineDays is what actually drives the
+  // overdue calculation, but gateName carries the compliance context through.
+  { name: "75-hour Basic Training Certificate", deadlineType: "fixed_days", deadlineDays: 120, gateName: "before_unsupervised_care", sortOrder: 9 },
   { name: "NAR application", deadlineType: "conditional", isConditional: true, sortOrder: 10 },
   { name: "HCA application", deadlineType: "fixed_days", deadlineDays: 14, sortOrder: 11 },
   { name: "Food Worker Card or Food Handling CE", deadlineType: "fixed_days", deadlineDays: 14, sortOrder: 12 },
