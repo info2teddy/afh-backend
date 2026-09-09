@@ -1,7 +1,7 @@
 // src/routes/employees.js
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const { prisma } = require("../middleware/tenant");
+const { prisma, requireAdmin } = require("../middleware/tenant");
 const router = express.Router();
 
 // GET /employees — list all employees for the current tenant, with credentials.
@@ -112,9 +112,9 @@ router.patch("/:id/link-quickbooks", async (req, res) => {
   res.json(updated);
 });
 
-// PATCH /employees/:id/pin — a manager sets/resets this employee's clock-in
-// kiosk PIN. 4-6 digits; stored hashed, same as a password.
-router.patch("/:id/pin", async (req, res) => {
+// PATCH /employees/:id/pin — admin-only (see requireAdmin). Sets/resets this
+// employee's clock-in kiosk PIN. 4-6 digits; stored hashed, same as a password.
+router.patch("/:id/pin", requireAdmin, async (req, res) => {
   const { pin } = req.body;
   if (!pin || !/^\d{4,6}$/.test(pin)) {
     return res.status(400).json({ error: "pin must be 4-6 digits." });
