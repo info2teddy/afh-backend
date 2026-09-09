@@ -95,9 +95,13 @@ Write the plan using exactly these section headers, each alone on its own line s
 ## OTHER ISSUES / CONCERNS
 ## PLAN REVIEW
 
-Under ACTIVITIES OF DAILY LIVING, cover each of: Ambulation/Mobility, Bed Mobility/Transfer, Eating, Toileting/Continence, Dressing, Personal Hygiene, Bathing, Foot Care, Skin Care — one bullet per domain, each noting the resident's level of independence, strengths/preferences, and what the caregiver should do.
+Format ACTIVITIES OF DAILY LIVING and INSTRUMENTAL ACTIVITIES OF DAILY LIVING as a markdown table, matching the DSHS template's own layout, with exactly these three columns:
+| Domain | Strengths & Preferences | Assistance Required / Caregiver Will |
+|---|---|---|
+Under ACTIVITIES OF DAILY LIVING, one row per domain for: Ambulation/Mobility, Bed Mobility/Transfer, Eating, Toileting/Continence, Dressing, Personal Hygiene, Bathing, Foot Care, Skin Care.
+Under INSTRUMENTAL ACTIVITIES OF DAILY LIVING, one row per domain for: Managing Finances, Shopping, Transportation, Activities/Social.
 
-Under INSTRUMENTAL ACTIVITIES OF DAILY LIVING, cover: Managing Finances, Shopping, Transportation, Activities/Social — same one-bullet-per-domain format.
+Format RESIDENT SUMMARY as a flat list of "**Label:** value" lines (one per line, no bullets) — Name, Date of Birth/Age, Room, Move-in Date, Care Level, Payer, Allergies, Legal Documents, Specialty Needs.
 
 For PLAN REVIEW, write exactly this standard note: this NCP will be reviewed after any significant change in the resident's condition, when it no longer reflects the resident's needs or preferences, at the resident's request, or at least every twelve months — whichever comes first.
 
