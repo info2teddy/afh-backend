@@ -32,7 +32,7 @@ router.post("/clock-in", async (req, res) => {
     return res.status(400).json({ error: "No PIN set for this employee yet — ask a manager to set one." });
   }
   if (!(await bcrypt.compare(pin, employee.pinHash))) {
-    return res.status(401).json({ error: "Incorrect PIN." });
+    return res.status(403).json({ error: "Incorrect PIN." });
   }
 
   const alreadyOpen = await prisma.shift.findFirst({
@@ -67,7 +67,7 @@ router.post("/:id/clock-out", async (req, res) => {
   if (!shift) return res.status(404).json({ error: "Shift not found." });
   if (shift.clockOut) return res.status(400).json({ error: "Shift already clocked out." });
   if (!(await bcrypt.compare(pin, shift.employee.pinHash || ""))) {
-    return res.status(401).json({ error: "Incorrect PIN." });
+    return res.status(403).json({ error: "Incorrect PIN." });
   }
 
   const updated = await prisma.shift.update({
