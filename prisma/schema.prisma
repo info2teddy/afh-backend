@@ -98,6 +98,7 @@ model Resident {
   moveInDate        DateTime  @map("move_in_date")
   moveOutDate       DateTime? @map("move_out_date")
   status            String    @default("active") // active | discharging | discharged
+  dischargeReason   String?   @map("discharge_reason") // higher_level_of_care | moved_in_with_family | transferred | deceased | other — set alongside moveOutDate when status leaves "active"
   qboCustomerId     String?   @map("qbo_customer_id")
   dateOfBirth       DateTime? @map("date_of_birth")
   room              String?
@@ -173,7 +174,8 @@ model Employee {
   payRate        Decimal  @map("pay_rate")
   employmentType String   @map("employment_type") // hourly | salary
   liveIn         Boolean  @default(false) @map("live_in")
-  status         String   @default("active")
+  status         String   @default("active") // active | inactive | terminated
+  endDate        DateTime? @map("end_date") // set alongside status when it leaves "active"
   qboEmployeeId  String?  @map("qbo_employee_id")
   pinHash        String?  @map("pin_hash") // caregiver's kiosk clock-in/out PIN, set by a manager
   createdAt      DateTime @default(now()) @map("created_at")

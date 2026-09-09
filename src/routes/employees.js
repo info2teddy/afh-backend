@@ -112,6 +112,35 @@ router.patch("/:id/link-quickbooks", async (req, res) => {
   res.json(updated);
 });
 
+const EMPLOYEE_STATUSES = ["active", "inactive", "terminated"];
+
+// PATCH /employees/:id/status — offboard (or reactivate) an employee. Never
+// deletes anything — historical shifts, payroll line items, and credentials
+// all stay exactly as they are; this only changes whether they show up on
+// the active roster / kiosk clock-in grid going forward (see the frontend's
+// "Show inactive" toggle on Care Team, and GET /kiosk/employees).
+router.patch("/:id/status", async (req, res) => {
+  const { status, endDate } = req.body;
+  if (!EMPLOYEE_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${EMPLOYEE_STATUSES.join(", ")}` });
+  }
+
+  const employee = await prisma.employee.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+  });
+  if (!employee) return res.status(404).json({ error: "Employee not found." });
+
+  const updated = await prisma.employee.update({
+    where: { id: employee.id },
+    data: {
+      status,
+      endDate: status === "active" ? null : endDate ? new Date(endDate) : employee.endDate ?? new Date(),
+    },
+  });
+  const { pinHash, ...rest } = updated;
+  res.json(rest);
+});
+
 // PATCH /employees/:id/pin — admin-only (see requireAdmin). Sets/resets this
 // employee's clock-in kiosk PIN. 4-6 digits; stored hashed, same as a password.
 router.patch("/:id/pin", requireAdmin, async (req, res) => {

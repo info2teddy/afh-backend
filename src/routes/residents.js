@@ -108,6 +108,39 @@ router.post("/:id/notes", async (req, res) => {
   res.status(201).json(note);
 });
 
+const RESIDENT_STATUSES = ["active", "discharging", "discharged"];
+const DISCHARGE_REASONS = ["higher_level_of_care", "moved_in_with_family", "transferred", "deceased", "other"];
+
+// PATCH /residents/:id/status — move a resident through discharge (or back to
+// active, e.g. a data-entry correction). Never deletes anything — care plans,
+// notes, and invoices all stay exactly as they are; a licensed AFH needs
+// those records to survive a resident leaving, for exactly as long a
+// "deceased" or "discharged" resident would matter for compliance.
+router.patch("/:id/status", async (req, res) => {
+  const { status, moveOutDate, dischargeReason } = req.body;
+  if (!RESIDENT_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${RESIDENT_STATUSES.join(", ")}` });
+  }
+  if (dischargeReason && !DISCHARGE_REASONS.includes(dischargeReason)) {
+    return res.status(400).json({ error: `dischargeReason must be one of: ${DISCHARGE_REASONS.join(", ")}` });
+  }
+
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const updated = await prisma.resident.update({
+    where: { id: resident.id },
+    data: {
+      status,
+      moveOutDate: status === "active" ? null : moveOutDate ? new Date(moveOutDate) : resident.moveOutDate ?? new Date(),
+      dischargeReason: status === "active" ? null : dischargeReason ?? resident.dischargeReason,
+    },
+  });
+  res.json(updated);
+});
+
 // PATCH /residents/:id/link-quickbooks — link this resident to an existing
 // QuickBooks Customer, done once during onboarding or when a resident moves in.
 router.patch("/:id/link-quickbooks", async (req, res) => {
