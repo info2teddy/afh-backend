@@ -1,10 +1,15 @@
 // src/routes/payroll.js
 const express = require("express");
-const { prisma } = require("../middleware/tenant");
+const { prisma, requireAdmin } = require("../middleware/tenant");
 const { evaluateWeeklyHours } = require("../lib/overtimeFlagging");
 const { getValidAccessToken } = require("../lib/quickbooksAuth");
 const { pushTimeActivity } = require("../lib/quickbooksClient");
 const router = express.Router();
+
+// Payroll — calculating and submitting a run — is admin-only, per the same
+// "too consequential for a manager to do unsupervised" call as Facilities
+// and QuickBooks. Applies to every route below.
+router.use(requireAdmin);
 
 // FLSA overtime is calculated per WORKWEEK, not per pay period — a biweekly
 // or semi-monthly payroll run must evaluate each Mon-Sun week separately and
