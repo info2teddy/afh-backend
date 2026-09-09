@@ -29,7 +29,7 @@ router.get("/", async (req, res) => {
   const assessmentCutoff = addDays(today, 14);
   const unapprovedShiftCutoff = addDays(today, -3); // clocked out 3+ days ago, still unapproved
 
-  const [expiringCredentials, activeResidents, todaysCarePlans, overdueOnboarding, unapprovedShifts] =
+  const [expiringCredentials, activeResidents, residentsWithPlan, overdueOnboarding, unapprovedShifts] =
     await Promise.all([
       prisma.credential.findMany({
         where: { tenantId: req.tenantId, expirationDate: { lte: addDays(today, 90) } },
@@ -41,8 +41,9 @@ router.get("/", async (req, res) => {
         select: { id: true, name: true, nextAssessmentDate: true },
       }),
       prisma.carePlan.findMany({
-        where: { tenantId: req.tenantId, planDate: { gte: today, lt: addDays(today, 1) } },
+        where: { tenantId: req.tenantId },
         select: { residentId: true },
+        distinct: ["residentId"],
       }),
       prisma.employeeOnboardingItem.findMany({
         where: { tenantId: req.tenantId, completedAt: null, dueDate: { lt: today } },
@@ -77,14 +78,14 @@ router.get("/", async (req, res) => {
     });
   }
 
-  const planned = new Set(todaysCarePlans.map((p) => p.residentId));
+  const planned = new Set(residentsWithPlan.map((p) => p.residentId));
   const residentsNeedingPlan = activeResidents.filter((r) => !planned.has(r.id));
   if (residentsNeedingPlan.length > 0) {
     alerts.push({
       type: "care_plan_missing",
       tone: "warning",
-      message: `${residentsNeedingPlan.length} resident${residentsNeedingPlan.length === 1 ? "" : "s"} missing today's care plan`,
-      link: "/care-plan",
+      message: `${residentsNeedingPlan.length} resident${residentsNeedingPlan.length === 1 ? "" : "s"} missing a Negotiated Care Plan`,
+      link: "/residents",
       count: residentsNeedingPlan.length,
     });
   }

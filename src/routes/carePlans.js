@@ -1,6 +1,10 @@
 // src/routes/carePlans.js
-// AI-drafted, date-specific care plans. Runs AFTER resolveTenant, so
-// req.tenantId is already trusted — every query below is scoped to it.
+// AI-drafted Negotiated Care Plans (NCP), in the DSHS AFH HCS NCP template's
+// section structure. A resident has one living plan — each generation is a
+// new revision that updates the previous one rather than replacing it from
+// scratch (see buildPrompt's previousPlan handling). Runs AFTER
+// resolveTenant, so req.tenantId is already trusted — every query below is
+// scoped to it.
 
 const express = require("express");
 const multer = require("multer");
@@ -26,17 +30,39 @@ const upload = multer({
   },
 });
 
-function buildPrompt(resident, planDate, sourceNotes, hasDocument) {
-  const dateLabel = new Date(planDate).toLocaleDateString(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+// Section structure mirrors the WA DSHS "AFH HCS Resident Negotiated Care
+// Plan (NCP)" form — not a daily reminder. An NCP is a living document: it's
+// drafted once and then updated (never regenerated from scratch) whenever
+// something about the resident changes, or at least every 12 months. See
+// buildPrompt's previousPlan handling below.
+function buildPrompt(resident, sourceNotes, hasDocument, previousPlan) {
+  const age = resident.dateOfBirth
+    ? Math.floor((Date.now() - new Date(resident.dateOfBirth).getTime()) / (365.25 * 24 * 60 * 60 * 1000))
+    : null;
+
+  const facts = [
+    `Resident: ${resident.name}`,
+    age !== null ? `Age: ${age} (DOB ${new Date(resident.dateOfBirth).toLocaleDateString()})` : null,
+    `Room: ${resident.room || "not recorded"}`,
+    `Care level: ${resident.careLevel}`,
+    `Payer type: ${resident.payerType}${resident.medicaidSplitPct ? ` (Medicaid ${resident.medicaidSplitPct}%)` : ""}`,
+    `Move-in date: ${new Date(resident.moveInDate).toLocaleDateString()}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const extraContext = [];
+  if (previousPlan) {
+    extraContext.push(
+      `This resident already has a Negotiated Care Plan on file, drafted ${new Date(
+        previousPlan.createdAt
+      ).toLocaleDateString()}. UPDATE it — keep every section/detail that's still accurate, and only change what the new information below actually changes. Do not delete or invent details beyond what's given.\n\nCURRENT PLAN ON FILE:\n${
+        previousPlan.content
+      }`
+    );
+  }
   if (sourceNotes) {
-    extraContext.push(`Additional resident-specific notes provided by staff:\n${sourceNotes}`);
+    extraContext.push(`New information from staff:\n${sourceNotes}`);
   }
   if (hasDocument) {
     extraContext.push(
@@ -44,30 +70,43 @@ function buildPrompt(resident, planDate, sourceNotes, hasDocument) {
     );
   }
 
-  return `You are drafting a daily care plan for a resident of a licensed Adult Family Home (AFH) in Washington State. This is a DRAFT for a caregiver to review, edit, and sign off on — not a substitute for clinical judgment.
+  const hasGrounding = hasDocument || sourceNotes || previousPlan;
 
-Resident: ${resident.name}
-Care level: ${resident.careLevel}
-Payer type: ${resident.payerType}
-Move-in date: ${new Date(resident.moveInDate).toLocaleDateString()}
-Plan date: ${dateLabel}
+  return `You are drafting a Negotiated Care Plan (NCP) for a resident of a licensed Adult Family Home (AFH) in Washington State, following the same section structure as the DSHS AFH HCS Negotiated Care Plan template. This is a DRAFT for the provider/caregiver to review, correct, and sign — not a substitute for a real clinical or DSHS-required assessment.
+
+${facts}
 ${extraContext.length ? `\n${extraContext.join("\n\n")}\n` : ""}
-Write a concise, practical care plan for this specific date, covering:
-1. Activities of Daily Living (ADL) support appropriate to the care level (bathing, dressing, mobility, toileting)
-2. A medication/health-check reminder schedule${
-    hasDocument || sourceNotes
-      ? " (use specifics from the notes/document above where relevant)"
-      : ' (generic placeholders like "morning medications," "vitals check" — do not invent specific drug names or dosages, since none were provided)'
-  }
-3. Nutrition/meal notes
-4. Safety and mobility considerations
-5. Social/emotional engagement for the day
+Write the plan using exactly these section headers, each alone on its own line starting with "## ", in this order:
+## RESIDENT SUMMARY
+## EMERGENCY EVACUATION
+## MEDICAL STATUS / DIAGNOSIS OVERVIEW
+## COMMUNICATION (SPEECH / HEARING / VISION)
+## MEDICATION MANAGEMENT
+## HEALTH INDICATORS
+## TREATMENTS / PROGRAMS / THERAPIES
+## PSYCH / SOCIAL / COGNITIVE STATUS AND BEHAVIOR
+## ABILITY TO BE LEFT ALONE
+## UNIVERSAL PRECAUTIONS
+## ACTIVITIES OF DAILY LIVING
+## INSTRUMENTAL ACTIVITIES OF DAILY LIVING
+## ACTIVITY PREFERENCES
+## SMOKING
+## CASE MANAGEMENT / RESPONSIBLE PARTIES
+## OTHER ISSUES / CONCERNS
+## PLAN REVIEW
 
-Format as short labeled sections with bullet points. Keep it under 300 words. ${
-    hasDocument || sourceNotes
-      ? "Ground clinical specifics in the notes/document provided above — do not invent anything beyond what's given there."
-      : "Do not fabricate specific medical diagnoses, medications, or allergies — flag where the caregiver should fill in resident-specific clinical details you don't have."
-  }`;
+Under ACTIVITIES OF DAILY LIVING, cover each of: Ambulation/Mobility, Bed Mobility/Transfer, Eating, Toileting/Continence, Dressing, Personal Hygiene, Bathing, Foot Care, Skin Care — one bullet per domain, each noting the resident's level of independence, strengths/preferences, and what the caregiver should do.
+
+Under INSTRUMENTAL ACTIVITIES OF DAILY LIVING, cover: Managing Finances, Shopping, Transportation, Activities/Social — same one-bullet-per-domain format.
+
+For PLAN REVIEW, write exactly this standard note: this NCP will be reviewed after any significant change in the resident's condition, when it no longer reflects the resident's needs or preferences, at the resident's request, or at least every twelve months — whichever comes first.
+
+For every other section, use short bullet points ("- ") or short paragraphs. ${
+    hasGrounding
+      ? "Ground every clinical specific (diagnoses, medications, behaviors, allergies) only in what's provided above — do not invent anything beyond it."
+      : 'Do not fabricate any specific diagnosis, medication, allergy, or behavior. For every section where no information was provided, write exactly: "Not yet assessed — caregiver to complete."'
+  }
+Do not use checkboxes or brackets. Do not include a title, date, or preamble — start directly with the first "## " header.`;
 }
 
 router.get("/", async (req, res) => {
@@ -133,7 +172,12 @@ router.post("/generate", upload.single("document"), async (req, res) => {
   const file = req.file;
   const sourceNotes = notes?.trim() || null;
 
-  const promptText = buildPrompt(resident, planDate, sourceNotes, !!file);
+  const previousPlan = await prisma.carePlan.findFirst({
+    where: { residentId, tenantId: req.tenantId },
+    orderBy: [{ planDate: "desc" }, { createdAt: "desc" }],
+  });
+
+  const promptText = buildPrompt(resident, sourceNotes, !!file, previousPlan);
   const userContent = [{ type: "text", text: promptText }];
   if (file) {
     const isPdf = file.mimetype === "application/pdf";
@@ -154,7 +198,7 @@ router.post("/generate", upload.single("document"), async (req, res) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1024,
+        max_tokens: 4096, // a full NCP covers ~17 sections — needs more room than the old daily-reminder plan did
         messages: [{ role: "user", content: userContent }],
       }),
     });
