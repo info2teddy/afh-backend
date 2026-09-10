@@ -209,6 +209,16 @@ model OnboardingRequirementTemplate {
   deadlineDays  Int?    @map("deadline_days") // set only when deadlineType = fixed_days
   gateName      String? @map("gate_name")     // e.g. 'before_unsupervised_care', set only when deadlineType = gate
   isConditional Boolean @default(false) @map("is_conditional") // e.g. NAR, Dementia cert — not required for every hire
+  // When true, this item can't be marked done with a plain checkbox — it
+  // requires uploading the actual document and AI-extracting/confirming a
+  // name (and, for real certificates, an expiration date) first.
+  requiresDocument Boolean @default(false) @map("requires_document")
+  // Set only for items that are also a real, renewable credential (CPR/First
+  // Aid, Food Worker Card, HCA/Dementia/MH/DD certs, etc.) — verifying the
+  // item then also creates a Credential row of this type, so it shows up in
+  // the Credentials page's expiry tracking without re-entry. Null for
+  // one-time proofs (I.D., background check result) that don't renew.
+  credentialType   String?  @map("credential_type")
   // Sequencing: this requirement can't be marked ready to start until the
   // dependency is completed (e.g. fingerprint can't be scheduled until the
   // background check clears).
@@ -233,6 +243,14 @@ model EmployeeOnboardingItem {
   dueDate      DateTime? @map("due_date") // computed at creation for fixed_days items; null for gate/conditional until applicable
   completedAt  DateTime? @map("completed_at")
   createdAt    DateTime  @default(now()) @map("created_at")
+
+  // Set together, only for requiresDocument items, when a manager confirms
+  // the AI-extracted fields off the uploaded document (see POST .../verify).
+  verifiedName           String?   @map("verified_name")
+  verifiedExpirationDate DateTime? @map("verified_expiration_date")
+  documentName           String?   @map("document_name")
+  documentMimeType       String?   @map("document_mime_type")
+  documentData           Bytes?    @map("document_data")
 
   employee Employee                      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   template OnboardingRequirementTemplate  @relation(fields: [templateId], references: [id])
