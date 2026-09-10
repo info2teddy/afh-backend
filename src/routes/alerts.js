@@ -12,6 +12,7 @@
 
 const express = require("express");
 const { prisma } = require("../middleware/tenant");
+const { evaluateWeeklyHours } = require("../lib/overtimeFlagging");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -23,14 +24,30 @@ function addDays(date, days) {
   d.setDate(d.getDate() + days);
   return d;
 }
+// WA overtime (like federal FLSA) is calculated per workweek — Monday
+// through Sunday here, matching Timekeeping's own week boundary.
+function mondayOf(date) {
+  const day = date.getUTCDay();
+  const diff = date.getUTCDate() - day + (day === 0 ? -6 : 1);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), diff));
+}
 
 router.get("/", async (req, res) => {
   const today = todayUTC();
   const assessmentCutoff = addDays(today, 14);
   const unapprovedShiftCutoff = addDays(today, -3); // clocked out 3+ days ago, still unapproved
+  const weekStart = mondayOf(today);
+  const weekEnd = addDays(weekStart, 7);
 
-  const [expiringCredentials, activeResidents, residentsWithPlan, overdueOnboarding, unapprovedShifts] =
-    await Promise.all([
+  const [
+    expiringCredentials,
+    activeResidents,
+    residentsWithPlan,
+    overdueOnboarding,
+    unapprovedShifts,
+    activeEmployees,
+    thisWeeksShifts,
+  ] = await Promise.all([
       prisma.credential.findMany({
         where: { tenantId: req.tenantId, expirationDate: { lte: addDays(today, 90) } },
         include: { employee: { select: { name: true } } },
@@ -52,6 +69,21 @@ router.get("/", async (req, res) => {
       prisma.shift.findMany({
         where: { tenantId: req.tenantId, approved: false, clockOut: { not: null, lt: unapprovedShiftCutoff } },
         select: { id: true },
+      }),
+      prisma.employee.findMany({
+        where: { tenantId: req.tenantId, status: "active" },
+        select: { id: true, name: true },
+      }),
+      prisma.shift.findMany({
+        where: { tenantId: req.tenantId, clockIn: { gte: weekStart, lt: weekEnd }, clockOut: { not: null } },
+        select: {
+          employeeId: true,
+          clockIn: true,
+          clockOut: true,
+          shiftType: true,
+          sleepTimeExcludedMinutes: true,
+          sleepInterrupted: true,
+        },
       }),
     ]);
 
@@ -132,6 +164,51 @@ router.get("/", async (req, res) => {
       message: `${unapprovedShifts.length} shift${unapprovedShifts.length === 1 ? "" : "s"} clocked out 3+ days ago still unapproved`,
       link: "/timekeeping",
       count: unapprovedShifts.length,
+    });
+  }
+
+  // WA law requires overtime pay (1.5x) for hours worked over 40 in a
+  // workweek — flagging this while the week is still in progress (not just
+  // once a shift pushes someone over) gives a manager time to actually
+  // decide whether to approve OT or pull back hours, instead of finding out
+  // after the fact on the pay stub.
+  const shiftsByEmployee = {};
+  for (const s of thisWeeksShifts) (shiftsByEmployee[s.employeeId] ||= []).push(s);
+
+  let employeesInOvertime = 0;
+  let employeesApproachingOvertime = 0;
+  for (const employee of activeEmployees) {
+    const empShifts = shiftsByEmployee[employee.id];
+    if (!empShifts || empShifts.length === 0) continue;
+    const evaluated = evaluateWeeklyHours(
+      empShifts.map((s) => ({
+        clockIn: s.clockIn.toISOString(),
+        clockOut: s.clockOut.toISOString(),
+        shiftType: s.shiftType,
+        sleepTimeExcludedMinutes: s.sleepTimeExcludedMinutes,
+        sleepInterrupted: s.sleepInterrupted,
+      }))
+    );
+    if (evaluated.totalPaidHours > 40) employeesInOvertime++;
+    else if (evaluated.totalPaidHours >= 36) employeesApproachingOvertime++;
+  }
+
+  if (employeesInOvertime > 0) {
+    alerts.push({
+      type: "overtime_exceeded",
+      tone: "danger",
+      message: `${employeesInOvertime} employee${employeesInOvertime === 1 ? "" : "s"} already over 40 hours this week`,
+      link: "/timekeeping",
+      count: employeesInOvertime,
+    });
+  }
+  if (employeesApproachingOvertime > 0) {
+    alerts.push({
+      type: "overtime_approaching",
+      tone: "warning",
+      message: `${employeesApproachingOvertime} employee${employeesApproachingOvertime === 1 ? "" : "s"} approaching 40 hours this week`,
+      link: "/timekeeping",
+      count: employeesApproachingOvertime,
     });
   }
 

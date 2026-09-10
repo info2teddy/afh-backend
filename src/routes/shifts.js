@@ -15,6 +15,61 @@ router.get("/open", async (req, res) => {
   res.json(shifts);
 });
 
+// GET /shifts/week-overview?weekStart=2026-09-08 — every active employee's
+// hours for that week in one call, sorted highest-hours first, so a manager
+// can see at a glance who's approaching or already over the 40-hour
+// overtime threshold instead of checking one employee's week at a time.
+router.get("/week-overview", async (req, res) => {
+  const weekStart = req.query.weekStart ? new Date(req.query.weekStart) : null;
+  if (!weekStart) return res.status(400).json({ error: "weekStart query param is required." });
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+
+  const [employees, shifts] = await Promise.all([
+    prisma.employee.findMany({
+      where: { tenantId: req.tenantId, status: "active" },
+      select: { id: true, name: true },
+    }),
+    prisma.shift.findMany({
+      where: { tenantId: req.tenantId, clockIn: { gte: weekStart, lt: weekEnd }, clockOut: { not: null } },
+      select: {
+        employeeId: true,
+        clockIn: true,
+        clockOut: true,
+        shiftType: true,
+        sleepTimeExcludedMinutes: true,
+        sleepInterrupted: true,
+      },
+    }),
+  ]);
+
+  const shiftsByEmployee = {};
+  for (const s of shifts) (shiftsByEmployee[s.employeeId] ||= []).push(s);
+
+  const overview = employees.map((e) => {
+    const empShifts = shiftsByEmployee[e.id] || [];
+    const evaluated = evaluateWeeklyHours(
+      empShifts.map((s) => ({
+        clockIn: s.clockIn.toISOString(),
+        clockOut: s.clockOut.toISOString(),
+        shiftType: s.shiftType,
+        sleepTimeExcludedMinutes: s.sleepTimeExcludedMinutes,
+        sleepInterrupted: s.sleepInterrupted,
+      }))
+    );
+    return {
+      employeeId: e.id,
+      name: e.name,
+      totalPaidHours: evaluated.totalPaidHours,
+      overtimeHours: evaluated.overtimeHours,
+      flags: evaluated.flags,
+    };
+  });
+
+  overview.sort((a, b) => b.totalPaidHours - a.totalPaidHours);
+  res.json(overview);
+});
+
 // POST /shifts/clock-in — start a shift. Requires the employee's kiosk PIN,
 // since this is meant to be usable from a shared home tablet without a
 // manager entering their own login for every caregiver.
@@ -68,6 +123,15 @@ router.post("/:id/clock-out", async (req, res) => {
   if (shift.clockOut) return res.status(400).json({ error: "Shift already clocked out." });
   if (!(await bcrypt.compare(pin, shift.employee.pinHash || ""))) {
     return res.status(403).json({ error: "Incorrect PIN." });
+  }
+
+  // WA state (following the federal live-in/24-hour-shift rule) caps
+  // excludable sleep time at 8 hours per period, and only if it was
+  // actually available — sleepInterrupted already zeroes the exclusion out
+  // below for the "didn't get uninterrupted sleep" case; this catches
+  // someone typing in more than the law ever allows to exclude.
+  if (sleepTimeExcludedMinutes != null && Number(sleepTimeExcludedMinutes) > 480) {
+    return res.status(400).json({ error: "Sleep time excluded can't exceed 8 hours (480 minutes) under WA state law." });
   }
 
   const updated = await prisma.shift.update({
