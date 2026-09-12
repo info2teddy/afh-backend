@@ -213,6 +213,21 @@ router.post("/:id/sync", async (req, res) => {
   }
 });
 
+// DELETE /expenses/:id — unsynced only. Once it's been pushed to QuickBooks
+// as a Purchase, deleting it here would leave that real accounting record
+// orphaned, so it has to stay (same "gone consequential, can't undo" rule
+// as invoices).
+router.delete("/:id", async (req, res) => {
+  const expense = await prisma.expense.findFirst({ where: { id: req.params.id, tenantId: req.tenantId } });
+  if (!expense) return res.status(404).json({ error: "Expense not found." });
+  if (expense.qboSynced) {
+    return res.status(400).json({ error: "This expense has already been synced to QuickBooks and can't be deleted." });
+  }
+
+  await prisma.expense.delete({ where: { id: expense.id } });
+  res.status(204).end();
+});
+
 router.use((err, req, res, next) => {
   if (err instanceof multer.MulterError || err.message?.includes("PDF or image")) {
     return res.status(400).json({ error: err.message });

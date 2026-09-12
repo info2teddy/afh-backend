@@ -311,4 +311,40 @@ router.post("/inquiries/:id/place", async (req, res) => {
   res.json(updated);
 });
 
+// DELETE /placements/inquiries/:id — only before it's placed. A placed
+// inquiry is the historical record of a real referral outcome (and may
+// point at a real Resident), so it can't be removed — same "gone
+// consequential, can't undo" rule as invoices.
+router.delete("/inquiries/:id", async (req, res) => {
+  const inquiry = await prisma.placementInquiry.findUnique({ where: { id: req.params.id } });
+  if (!inquiry) return res.status(404).json({ error: "Inquiry not found." });
+  if (inquiry.status === "placed") {
+    return res.status(400).json({ error: "This inquiry has been placed and can't be deleted — decline it instead if it was placed in error." });
+  }
+
+  await prisma.placementInquiry.delete({ where: { id: inquiry.id } });
+  res.status(204).end();
+});
+
+// DELETE /placements/facilities/:id — only external facilities (never
+// tenant-linked ones, which are just a mirror of a real Home and get
+// re-synced automatically anyway) that have never actually been used in a
+// completed placement.
+router.delete("/facilities/:id", async (req, res) => {
+  const facility = await prisma.placementFacility.findUnique({
+    where: { id: req.params.id },
+    include: { _count: { select: { inquiries: true } } },
+  });
+  if (!facility) return res.status(404).json({ error: "Facility not found." });
+  if (facility.homeId) {
+    return res.status(400).json({ error: "This facility mirrors a real CareFit Connect home and can't be removed here." });
+  }
+  if (facility._count.inquiries > 0) {
+    return res.status(400).json({ error: "This facility has been used in a placement and can't be deleted." });
+  }
+
+  await prisma.placementFacility.delete({ where: { id: facility.id } });
+  res.status(204).end();
+});
+
 module.exports = router;
