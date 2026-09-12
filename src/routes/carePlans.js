@@ -99,7 +99,7 @@ Format ACTIVITIES OF DAILY LIVING and INSTRUMENTAL ACTIVITIES OF DAILY LIVING as
 | Domain | Strengths & Preferences | Assistance Required / Caregiver Will |
 |---|---|---|
 Under ACTIVITIES OF DAILY LIVING, one row per domain for: Ambulation/Mobility, Bed Mobility/Transfer, Eating, Toileting/Continence, Dressing, Personal Hygiene, Bathing, Foot Care, Skin Care.
-Under INSTRUMENTAL ACTIVITIES OF DAILY LIVING, one row per domain for: Managing Finances, Shopping, Transportation, Activities/Social.
+Under INSTRUMENTAL ACTIVITIES OF DAILY LIVING, one row per domain for: Managing Finances, Shopping, Transportation, Activities/Social. For Managing Finances, whenever the resident needs full assistance managing their finances, the Assistance Required / Caregiver Will cell must state that staff provide full assistance with financial management on the resident's behalf, AND that all transactions and financial records must be independently verified (double-checked) by a second staff member — a standard safeguard against errors or financial exploitation.
 
 Format RESIDENT SUMMARY as a flat list of "**Label:** value" lines (one per line, no bullets) — Name, Date of Birth/Age, Room, Move-in Date, Care Level, Payer, Allergies, Legal Documents, Specialty Needs.
 
