@@ -429,12 +429,36 @@ model PlacementFacility {
   contactPhone       String?  @map("contact_phone")
   contactEmail       String?  @map("contact_email")
   capacity           Int? // manually entered for external (non-tenant) facilities only
+  currentResidents   Int?     @map("current_residents") // self-reported occupancy — external facilities only, since tenant-linked ones compute this live from real Residents
   careLevelsAccepted String?  @map("care_levels_accepted") // free text, e.g. "Level 1-2"
   // Cultural/language fit is CareFit's actual differentiator as a placement
   // agency (per carefitconnect.com: "culturally intelligent placement,"
   // matching on language/faith/traditions, not just price/location/care
   // level) — free text, e.g. "Amharic-speaking staff; Ethiopian Orthodox household".
   culturalNotes      String?  @map("cultural_notes") @db.Text
+  // The fields below come from CareFit's real paper "Partnership Form" AFH
+  // intake — kept as the ones that actually matter for matching a resident
+  // (compliance/trust, payer fit, gender, specialty care, price) rather than
+  // the form's full staffing/marketing detail, which belongs in `notes`.
+  licenseNumber          String?   @map("license_number")
+  licenseExpiryDate      DateTime? @map("license_expiry_date")
+  genderAccepted         String?   @map("gender_accepted") // male | female | both
+  specialtyCare          String?   @map("specialty_care") @db.Text // free text, e.g. "Dementia, Hospice, Bedbound/Hoyer Lift"
+  acceptsMedicaid        Boolean?  @map("accepts_medicaid")
+  medicaidManagedCareOrgs String?  @map("medicaid_managed_care_orgs") // e.g. "Molina, United, Amerigroup, CHPW"
+  privateRoomPricing     String?   @map("private_room_pricing") // free text range, e.g. "$3,200-$3,800/mo"
+  sharedRoomPricing      String?   @map("shared_room_pricing")
+  // Consent gate from the paper form ("do you give permission for CareFit
+  // Connect to share your AFH info with referral partners or families?") —
+  // a facility should never be surfaced to a prospective family without this.
+  okToShareWithFamilies  Boolean?  @map("ok_to_share_with_families")
+  // Set when an external AFH submits itself via the public intake form
+  // (see routes/publicIntake.js) rather than CareFit staff adding it —
+  // reviewedAt stays null until an admin has actually looked at the
+  // submission, and unreviewed facilities are excluded from the "Place"
+  // picker so nobody gets placed somewhere CareFit hasn't verified.
+  submittedByFacility Boolean  @default(false) @map("submitted_by_facility")
+  reviewedAt          DateTime? @map("reviewed_at")
   notes              String?  @db.Text
   tenantId           String?  @map("tenant_id")
   homeId             String?  @map("home_id")

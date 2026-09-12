@@ -62,7 +62,7 @@ router.get("/facilities", async (req, res) => {
 
   const withCapacity = facilities.map((f) => {
     const isTenantLinked = !!f.homeId;
-    const occupied = isTenantLinked ? occupiedByHome.get(f.homeId) || 0 : null;
+    const occupied = isTenantLinked ? occupiedByHome.get(f.homeId) || 0 : f.currentResidents ?? null;
     const capacity = f.capacity;
     return {
       id: f.id,
@@ -72,41 +72,108 @@ router.get("/facilities", async (req, res) => {
       contactPhone: f.contactPhone,
       contactEmail: f.contactEmail,
       capacity,
+      currentResidents: f.currentResidents,
       careLevelsAccepted: f.careLevelsAccepted,
       culturalNotes: f.culturalNotes,
+      licenseNumber: f.licenseNumber,
+      licenseExpiryDate: f.licenseExpiryDate,
+      genderAccepted: f.genderAccepted,
+      specialtyCare: f.specialtyCare,
+      acceptsMedicaid: f.acceptsMedicaid,
+      medicaidManagedCareOrgs: f.medicaidManagedCareOrgs,
+      privateRoomPricing: f.privateRoomPricing,
+      sharedRoomPricing: f.sharedRoomPricing,
+      okToShareWithFamilies: f.okToShareWithFamilies,
       notes: f.notes,
       isTenantLinked,
       tenantName: isTenantLinked ? tenantNameById.get(f.tenantId) : null,
       occupied,
       openBeds: isTenantLinked && capacity != null ? Math.max(capacity - occupied, 0) : null,
+      submittedByFacility: f.submittedByFacility,
+      pendingReview: f.submittedByFacility && !f.reviewedAt,
     };
   });
 
   res.json(withCapacity);
 });
 
+const FACILITY_FIELDS = [
+  "name",
+  "address",
+  "contactName",
+  "contactPhone",
+  "contactEmail",
+  "capacity",
+  "currentResidents",
+  "careLevelsAccepted",
+  "culturalNotes",
+  "licenseNumber",
+  "licenseExpiryDate",
+  "genderAccepted",
+  "specialtyCare",
+  "acceptsMedicaid",
+  "medicaidManagedCareOrgs",
+  "privateRoomPricing",
+  "sharedRoomPricing",
+  "okToShareWithFamilies",
+  "notes",
+];
+
+function buildFacilityData(body) {
+  const data = {};
+  for (const field of FACILITY_FIELDS) {
+    if (body[field] === undefined) continue;
+    if (field === "capacity" || field === "currentResidents") {
+      data[field] = body[field] === "" || body[field] == null ? null : Number(body[field]);
+    } else if (field === "licenseExpiryDate") {
+      data[field] = body[field] ? new Date(body[field]) : null;
+    } else if (field === "acceptsMedicaid" || field === "okToShareWithFamilies") {
+      data[field] = body[field] === true || body[field] === "true" ? true : body[field] === false || body[field] === "false" ? false : null;
+    } else {
+      data[field] = body[field] || null;
+    }
+  }
+  return data;
+}
+
 // POST /placements/facilities — add a purely external AFH (not a CareFit
 // Connect customer) to the placement book. Tenant-linked facilities are
 // created automatically by syncFacilitiesFromTenants above, never here.
 router.post("/facilities", async (req, res) => {
-  const { name, address, contactName, contactPhone, contactEmail, capacity, careLevelsAccepted, culturalNotes, notes } =
-    req.body;
-  if (!name?.trim()) return res.status(400).json({ error: "name is required." });
+  if (!req.body.name?.trim()) return res.status(400).json({ error: "name is required." });
 
   const facility = await prisma.placementFacility.create({
-    data: {
-      name: name.trim(),
-      address: address || null,
-      contactName: contactName || null,
-      contactPhone: contactPhone || null,
-      contactEmail: contactEmail || null,
-      capacity: capacity != null && capacity !== "" ? Number(capacity) : null,
-      careLevelsAccepted: careLevelsAccepted || null,
-      culturalNotes: culturalNotes || null,
-      notes: notes || null,
-    },
+    data: { ...buildFacilityData(req.body), name: req.body.name.trim() },
   });
   res.status(201).json(facility);
+});
+
+// PATCH /placements/facilities/:id — correct/complete a facility's details.
+// Mainly used when reviewing a self-submitted external facility (below).
+router.patch("/facilities/:id", async (req, res) => {
+  const facility = await prisma.placementFacility.findUnique({ where: { id: req.params.id } });
+  if (!facility) return res.status(404).json({ error: "Facility not found." });
+
+  const updated = await prisma.placementFacility.update({
+    where: { id: facility.id },
+    data: buildFacilityData(req.body),
+  });
+  res.json(updated);
+});
+
+// POST /placements/facilities/:id/review — an admin has looked at a
+// facility an outside AFH submitted itself (see routes/publicIntake.js) and
+// is vouching for it. Only after this can it be selected in the "Place"
+// picker — see the guard in POST /inquiries/:id/place below.
+router.post("/facilities/:id/review", async (req, res) => {
+  const facility = await prisma.placementFacility.findUnique({ where: { id: req.params.id } });
+  if (!facility) return res.status(404).json({ error: "Facility not found." });
+
+  const updated = await prisma.placementFacility.update({
+    where: { id: facility.id },
+    data: { reviewedAt: new Date() },
+  });
+  res.json(updated);
 });
 
 // GET /placements/inquiries — the pipeline, most urgent/newest first.
@@ -200,6 +267,9 @@ router.post("/inquiries/:id/place", async (req, res) => {
 
   const facility = await prisma.placementFacility.findUnique({ where: { id: facilityId } });
   if (!facility) return res.status(404).json({ error: "Facility not found." });
+  if (facility.submittedByFacility && !facility.reviewedAt) {
+    return res.status(400).json({ error: "This facility was self-submitted and hasn't been reviewed yet — review it before placing anyone there." });
+  }
 
   let placedResidentId = null;
 

@@ -29,6 +29,7 @@ const financeRouter = require("./routes/finance");
 const analyticsRouter = require("./routes/analytics");
 const alertsRouter = require("./routes/alerts");
 const placementsRouter = require("./routes/placements");
+const publicIntakeRouter = require("./routes/publicIntake");
 
 const app = express();
 
@@ -55,6 +56,11 @@ app.use("/quickbooks/callback", quickbooksCallbackRouter);
 // businesses has no single tenant context yet, so this does its own auth
 // check (see routes/tenants.js) instead of going through resolveTenant.
 app.use("/tenants", tenantsRouter);
+
+// The one genuinely public route in the app — an outside AFH submitting
+// itself into the Placement facility book has no CareFit Connect account
+// at all, so there's no tenant or user to resolve. See routes/publicIntake.js.
+app.use("/public", publicIntakeRouter);
 
 // Everything below this line requires a resolved tenant.
 app.use(resolveTenant);
