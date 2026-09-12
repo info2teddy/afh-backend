@@ -28,6 +28,7 @@ const expensesRouter = require("./routes/expenses");
 const financeRouter = require("./routes/finance");
 const analyticsRouter = require("./routes/analytics");
 const alertsRouter = require("./routes/alerts");
+const placementsRouter = require("./routes/placements");
 
 const app = express();
 
@@ -77,6 +78,7 @@ app.use("/expenses", expensesRouter);
 app.use("/finance", financeRouter);
 app.use("/analytics", analyticsRouter);
 app.use("/alerts", alertsRouter);
+app.use("/placements", placementsRouter);
 
 // Final safety net — catches anything a route didn't handle itself (now
 // reachable thanks to express-async-errors above) so a bug in one request

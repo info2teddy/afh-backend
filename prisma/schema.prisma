@@ -408,3 +408,76 @@ model Expense {
   @@index([homeId])
   @@map("expenses")
 }
+
+// --- Placement -------------------------------------------------------
+// CareFit also runs a placement/referral business: matching a prospective
+// resident to whichever AFH has an open bed that fits their needs — not
+// limited to AFHs that use CareFit Connect. Everything below is deliberately
+// NOT tenant-scoped (unlike every other model above) and is visible only to
+// CareFit admin (requireAdmin) across the whole placement book.
+
+// One AFH CareFit can place someone into. Most rows are NOT CareFit Connect
+// customers — tenantId/homeId are set only for the subset that also happen
+// to be tenants here, so Placement can show their real live capacity
+// instead of a manually-entered guess (see syncFacilitiesFromTenants in
+// routes/placements.js, which keeps this in sync with real Homes lazily).
+model PlacementFacility {
+  id                 String   @id @default(uuid())
+  name               String
+  address            String?
+  contactName        String?  @map("contact_name")
+  contactPhone       String?  @map("contact_phone")
+  contactEmail       String?  @map("contact_email")
+  capacity           Int? // manually entered for external (non-tenant) facilities only
+  careLevelsAccepted String?  @map("care_levels_accepted") // free text, e.g. "Level 1-2"
+  // Cultural/language fit is CareFit's actual differentiator as a placement
+  // agency (per carefitconnect.com: "culturally intelligent placement,"
+  // matching on language/faith/traditions, not just price/location/care
+  // level) — free text, e.g. "Amharic-speaking staff; Ethiopian Orthodox household".
+  culturalNotes      String?  @map("cultural_notes") @db.Text
+  notes              String?  @db.Text
+  tenantId           String?  @map("tenant_id")
+  homeId             String?  @map("home_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  inquiries PlacementInquiry[]
+
+  @@map("placement_facilities")
+}
+
+// A prospective resident CareFit is actively trying to place. Tracked
+// through a simple pipeline (new -> touring -> pending -> placed/declined).
+// Placing one only creates a real Resident record when the destination
+// facility is also a CareFit Connect tenant — otherwise this row is the
+// only record of the referral outcome.
+model PlacementInquiry {
+  id              String    @id @default(uuid())
+  residentName    String    @map("resident_name")
+  contactName     String?   @map("contact_name") // family member / POA, if not the resident themself
+  contactPhone    String?   @map("contact_phone")
+  contactEmail    String?   @map("contact_email")
+  referralSource  String?   @map("referral_source") // hospital, dshs_hca, family, self, other
+  careLevelNeeded String    @map("care_level_needed") // level_1 | level_2 | level_3
+  payerType       String    @map("payer_type") // private_pay | medicaid | split
+  // Language/faith/cultural preference — the actual matching criteria
+  // CareFit leads with, per carefitconnect.com; free text since it's a
+  // conversation with the family, not a fixed list, e.g. "Amharic-speaking,
+  // Ethiopian Orthodox preferred".
+  culturalPreferences String? @map("cultural_preferences") @db.Text
+  urgency         String    @default("normal") // normal | urgent
+  notes           String?   @db.Text
+  status          String    @default("new") // new | touring | pending | placed | declined
+  declinedReason  String?   @map("declined_reason")
+
+  placedFacilityId String?   @map("placed_facility_id")
+  placedResidentId String?   @map("placed_resident_id")
+  placedAt         DateTime? @map("placed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  placedFacility PlacementFacility? @relation(fields: [placedFacilityId], references: [id])
+
+  @@map("placement_inquiries")
+}
