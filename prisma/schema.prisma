@@ -44,8 +44,10 @@ model User {
   role         String   @default("manager") // admin (you, cross-tenant) | manager (client staff)
   createdAt    DateTime @default(now()) @map("created_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  residentNotes ResidentNote[]
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  residentNotes      ResidentNote[]
+  assignedPlacements Placement[]
+  placementEvents    PlacementEvent[]
 
   @@index([tenantId])
   @@map("users")
@@ -61,9 +63,9 @@ model Home {
   qboLocationId String?  @map("qbo_location_id") // QuickBooks Location, for per-branch P&L
   createdAt     DateTime @default(now()) @map("created_at")
 
-  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   residents   Resident[]
-  employees   Employee[]              // primary home
+  employees   Employee[] // primary home
   assignments EmployeeHomeAssignment[] // additional homes this branch's staff float to
   shifts      Shift[]
   expenses    Expense[]
@@ -73,41 +75,41 @@ model Home {
 }
 
 model RateSchedule {
-  id                 String   @id @default(uuid())
-  tenantId           String   @map("tenant_id")
-  homeId             String   @map("home_id")
-  careLevel          String   @map("care_level")
-  monthlyRate        Decimal  @map("monthly_rate")
-  roomAndBoardRate   Decimal  @default(0) @map("room_and_board_rate")
-  effectiveDate      DateTime @map("effective_date")
-  createdAt          DateTime @default(now()) @map("created_at")
+  id               String   @id @default(uuid())
+  tenantId         String   @map("tenant_id")
+  homeId           String   @map("home_id")
+  careLevel        String   @map("care_level")
+  monthlyRate      Decimal  @map("monthly_rate")
+  roomAndBoardRate Decimal  @default(0) @map("room_and_board_rate")
+  effectiveDate    DateTime @map("effective_date")
+  createdAt        DateTime @default(now()) @map("created_at")
 
-  @@index([tenantId])
   @@unique([homeId, careLevel, effectiveDate])
+  @@index([tenantId])
   @@map("rate_schedule")
 }
 
 model Resident {
-  id                String    @id @default(uuid())
-  tenantId          String    @map("tenant_id")
-  homeId            String    @map("home_id")
-  name              String
-  careLevel         String    @map("care_level")
-  payerType         String    @map("payer_type") // private_pay | medicaid | split
-  medicaidSplitPct  Decimal?  @map("medicaid_split_pct")
-  moveInDate        DateTime  @map("move_in_date")
-  moveOutDate       DateTime? @map("move_out_date")
-  status            String    @default("active") // active | discharging | discharged
-  dischargeReason   String?   @map("discharge_reason") // higher_level_of_care | moved_in_with_family | transferred | deceased | other — set alongside moveOutDate when status leaves "active"
-  qboCustomerId     String?   @map("qbo_customer_id")
-  dateOfBirth       DateTime? @map("date_of_birth")
-  room              String?
-  nextAssessmentDate DateTime? @map("next_assessment_date")
-  authorizationStatus String? @map("authorization_status") // pending | approved | denied — Medicaid/payer authorization, independent of `status`
-  createdAt         DateTime  @default(now()) @map("created_at")
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  homeId              String    @map("home_id")
+  name                String
+  careLevel           String    @map("care_level")
+  payerType           String    @map("payer_type") // private_pay | medicaid | split
+  medicaidSplitPct    Decimal?  @map("medicaid_split_pct")
+  moveInDate          DateTime  @map("move_in_date")
+  moveOutDate         DateTime? @map("move_out_date")
+  status              String    @default("active") // active | discharging | discharged
+  dischargeReason     String?   @map("discharge_reason") // higher_level_of_care | moved_in_with_family | transferred | deceased | other — set alongside moveOutDate when status leaves "active"
+  qboCustomerId       String?   @map("qbo_customer_id")
+  dateOfBirth         DateTime? @map("date_of_birth")
+  room                String?
+  nextAssessmentDate  DateTime? @map("next_assessment_date")
+  authorizationStatus String?   @map("authorization_status") // pending | approved | denied — Medicaid/payer authorization, independent of `status`
+  createdAt           DateTime  @default(now()) @map("created_at")
 
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home      Home       @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home      Home           @relation(fields: [homeId], references: [id], onDelete: Cascade)
   invoices  Invoice[]
   carePlans CarePlan[]
   notes     ResidentNote[]
@@ -121,22 +123,22 @@ model Resident {
 // the resident's care level/payer info via the Anthropic API — see
 // routes/carePlans.js. A caregiver should review before relying on it.
 model CarePlan {
-  id        String   @id @default(uuid())
-  tenantId  String   @map("tenant_id")
-  residentId String  @map("resident_id")
-  planDate  DateTime @map("plan_date")
-  content   String   @db.Text
-  model     String   // which AI model generated this, for traceability
-  createdAt DateTime @default(now()) @map("created_at")
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  residentId String   @map("resident_id")
+  planDate   DateTime @map("plan_date")
+  content    String   @db.Text
+  model      String // which AI model generated this, for traceability
+  createdAt  DateTime @default(now()) @map("created_at")
 
   // Optional resident-specific context supplied at generation time — free-text
   // notes and/or one uploaded document (e.g. a physician's order, discharge
   // summary, assessment form). Both are sent to the model as part of the
   // prompt so the plan can reference specifics beyond care level/payer type.
-  sourceNotes             String? @db.Text @map("source_notes")
-  sourceDocumentName      String? @map("source_document_name")
-  sourceDocumentMimeType  String? @map("source_document_mime_type")
-  sourceDocumentData      Bytes?  @map("source_document_data")
+  sourceNotes            String? @map("source_notes") @db.Text
+  sourceDocumentName     String? @map("source_document_name")
+  sourceDocumentMimeType String? @map("source_document_mime_type")
+  sourceDocumentData     Bytes?  @map("source_document_data")
 
   resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
 
@@ -165,25 +167,25 @@ model ResidentNote {
 }
 
 model Employee {
-  id             String   @id @default(uuid())
-  tenantId       String   @map("tenant_id")
-  homeId         String   @map("home_id")
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  homeId         String    @map("home_id")
   name           String
-  role           String   // caregiver | resident_manager | rn_delegator | other
-  hireDate       DateTime @map("hire_date")
-  payRate        Decimal  @map("pay_rate")
-  employmentType String   @map("employment_type") // hourly | salary
-  liveIn         Boolean  @default(false) @map("live_in")
-  status         String   @default("active") // active | inactive | terminated
+  role           String // caregiver | resident_manager | rn_delegator | other
+  hireDate       DateTime  @map("hire_date")
+  payRate        Decimal   @map("pay_rate")
+  employmentType String    @map("employment_type") // hourly | salary
+  liveIn         Boolean   @default(false) @map("live_in")
+  status         String    @default("active") // active | inactive | terminated
   endDate        DateTime? @map("end_date") // set alongside status when it leaves "active"
-  qboEmployeeId  String?  @map("qbo_employee_id")
-  pinHash        String?  @map("pin_hash") // caregiver's kiosk clock-in/out PIN, set by a manager
-  createdAt      DateTime @default(now()) @map("created_at")
+  qboEmployeeId  String?   @map("qbo_employee_id")
+  pinHash        String?   @map("pin_hash") // caregiver's kiosk clock-in/out PIN, set by a manager
+  createdAt      DateTime  @default(now()) @map("created_at")
 
-  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home        Home         @relation(fields: [homeId], references: [id], onDelete: Cascade)
-  credentials Credential[]
-  shifts      Shift[]
+  tenant           Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home             Home                     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  credentials      Credential[]
+  shifts           Shift[]
   payrollLineItems PayrollLineItem[]
   additionalHomes  EmployeeHomeAssignment[]
   onboardingItems  EmployeeOnboardingItem[]
@@ -202,13 +204,13 @@ model Employee {
 //   - conditional: only applies to some hires (e.g. NAR only if nurse
 //     delegation is needed at that home)
 model OnboardingRequirementTemplate {
-  id            String  @id @default(uuid())
-  tenantId      String  @map("tenant_id")
-  name          String
-  deadlineType  String  @map("deadline_type") // fixed_days | gate | conditional
-  deadlineDays  Int?    @map("deadline_days") // set only when deadlineType = fixed_days
-  gateName      String? @map("gate_name")     // e.g. 'before_unsupervised_care', set only when deadlineType = gate
-  isConditional Boolean @default(false) @map("is_conditional") // e.g. NAR, Dementia cert — not required for every hire
+  id               String  @id @default(uuid())
+  tenantId         String  @map("tenant_id")
+  name             String
+  deadlineType     String  @map("deadline_type") // fixed_days | gate | conditional
+  deadlineDays     Int?    @map("deadline_days") // set only when deadlineType = fixed_days
+  gateName         String? @map("gate_name") // e.g. 'before_unsupervised_care', set only when deadlineType = gate
+  isConditional    Boolean @default(false) @map("is_conditional") // e.g. NAR, Dementia cert — not required for every hire
   // When true, this item can't be marked done with a plain checkbox — it
   // requires uploading the actual document and AI-extracting/confirming a
   // name (and, for real certificates, an expiration date) first.
@@ -218,16 +220,16 @@ model OnboardingRequirementTemplate {
   // item then also creates a Credential row of this type, so it shows up in
   // the Credentials page's expiry tracking without re-entry. Null for
   // one-time proofs (I.D., background check result) that don't renew.
-  credentialType   String?  @map("credential_type")
+  credentialType   String? @map("credential_type")
   // Sequencing: this requirement can't be marked ready to start until the
   // dependency is completed (e.g. fingerprint can't be scheduled until the
   // background check clears).
-  dependsOnId   String? @map("depends_on_id")
-  sortOrder     Int     @default(0) @map("sort_order")
+  dependsOnId      String? @map("depends_on_id")
+  sortOrder        Int     @default(0) @map("sort_order")
 
-  dependsOn OnboardingRequirementTemplate?  @relation("Dependency", fields: [dependsOnId], references: [id])
+  dependsOn  OnboardingRequirementTemplate?  @relation("Dependency", fields: [dependsOnId], references: [id])
   dependents OnboardingRequirementTemplate[] @relation("Dependency")
-  items     EmployeeOnboardingItem[]
+  items      EmployeeOnboardingItem[]
 
   @@index([tenantId])
   @@map("onboarding_requirement_templates")
@@ -236,13 +238,13 @@ model OnboardingRequirementTemplate {
 // One instance of a requirement for one specific employee, created when the
 // employee is hired (or when a conditional requirement becomes relevant).
 model EmployeeOnboardingItem {
-  id           String    @id @default(uuid())
-  tenantId     String    @map("tenant_id")
-  employeeId   String    @map("employee_id")
-  templateId   String    @map("template_id")
-  dueDate      DateTime? @map("due_date") // computed at creation for fixed_days items; null for gate/conditional until applicable
-  completedAt  DateTime? @map("completed_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  id          String    @id @default(uuid())
+  tenantId    String    @map("tenant_id")
+  employeeId  String    @map("employee_id")
+  templateId  String    @map("template_id")
+  dueDate     DateTime? @map("due_date") // computed at creation for fixed_days items; null for gate/conditional until applicable
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   // Set together, only for requiresDocument items, when a manager confirms
   // the AI-extracted fields off the uploaded document (see POST .../verify).
@@ -253,11 +255,11 @@ model EmployeeOnboardingItem {
   documentData           Bytes?    @map("document_data")
 
   employee Employee                      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  template OnboardingRequirementTemplate  @relation(fields: [templateId], references: [id])
+  template OnboardingRequirementTemplate @relation(fields: [templateId], references: [id])
 
+  @@unique([employeeId, templateId])
   @@index([tenantId])
   @@index([employeeId])
-  @@unique([employeeId, templateId])
   @@map("employee_onboarding_items")
 }
 
@@ -293,19 +295,19 @@ model Credential {
 }
 
 model Shift {
-  id                        String    @id @default(uuid())
-  tenantId                  String    @map("tenant_id")
-  employeeId                String    @map("employee_id")
-  homeId                    String    @map("home_id") // which branch this specific shift was worked at
-  clockIn                   DateTime  @map("clock_in")
-  clockOut                  DateTime? @map("clock_out")
-  shiftType                 String    @map("shift_type") // day | overnight | live_in
-  sleepTimeExcludedMinutes  Int       @default(0) @map("sleep_time_excluded_minutes")
-  sleepInterrupted          Boolean   @default(false) @map("sleep_interrupted")
-  approved                  Boolean   @default(false)
-  approvedBy                String?   @map("approved_by")
-  approvedAt                DateTime? @map("approved_at")
-  createdAt                 DateTime  @default(now()) @map("created_at")
+  id                       String    @id @default(uuid())
+  tenantId                 String    @map("tenant_id")
+  employeeId               String    @map("employee_id")
+  homeId                   String    @map("home_id") // which branch this specific shift was worked at
+  clockIn                  DateTime  @map("clock_in")
+  clockOut                 DateTime? @map("clock_out")
+  shiftType                String    @map("shift_type") // day | overnight | live_in
+  sleepTimeExcludedMinutes Int       @default(0) @map("sleep_time_excluded_minutes")
+  sleepInterrupted         Boolean   @default(false) @map("sleep_interrupted")
+  approved                 Boolean   @default(false)
+  approvedBy               String?   @map("approved_by")
+  approvedAt               DateTime? @map("approved_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   home     Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
@@ -327,11 +329,11 @@ model Invoice {
   qboSyncToken       String?  @map("qbo_sync_token")
   createdAt          DateTime @default(now()) @map("created_at")
 
-  resident  Resident           @relation(fields: [residentId], references: [id], onDelete: Cascade)
+  resident  Resident          @relation(fields: [residentId], references: [id], onDelete: Cascade)
   lineItems InvoiceLineItem[]
 
-  @@index([tenantId])
   @@unique([residentId, billingPeriodStart])
+  @@index([tenantId])
   @@map("invoices")
 }
 
@@ -359,18 +361,18 @@ model PayrollRun {
 
   lineItems PayrollLineItem[]
 
-  @@index([tenantId])
   @@unique([tenantId, payPeriodStart])
+  @@index([tenantId])
   @@map("payroll_runs")
 }
 
 model PayrollLineItem {
-  id             String  @id @default(uuid())
-  payrollRunId   String  @map("payroll_run_id")
-  employeeId     String  @map("employee_id")
-  regularHours   Decimal @default(0) @map("regular_hours")
-  overtimeHours  Decimal @default(0) @map("overtime_hours")
-  grossPay       Decimal @map("gross_pay")
+  id            String  @id @default(uuid())
+  payrollRunId  String  @map("payroll_run_id")
+  employeeId    String  @map("employee_id")
+  regularHours  Decimal @default(0) @map("regular_hours")
+  overtimeHours Decimal @default(0) @map("overtime_hours")
+  grossPay      Decimal @map("gross_pay")
 
   payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
   employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
@@ -389,7 +391,7 @@ model Expense {
   tenantId        String   @map("tenant_id")
   homeId          String   @map("home_id")
   date            DateTime
-  category        String   // Food & Supplies | Rent | Utilities | Medical Supplies | Insurance | Other
+  category        String // Food & Supplies | Rent | Utilities | Medical Supplies | Insurance | Other
   vendor          String?
   amount          Decimal
   paymentMethod   String?  @map("payment_method") // business_card | check | cash | other
@@ -422,77 +424,88 @@ model Expense {
 // instead of a manually-entered guess (see syncFacilitiesFromTenants in
 // routes/placements.js, which keeps this in sync with real Homes lazily).
 model PlacementFacility {
-  id                 String   @id @default(uuid())
-  name               String
-  address            String?
-  contactName        String?  @map("contact_name")
-  contactPhone       String?  @map("contact_phone")
-  contactEmail       String?  @map("contact_email")
-  capacity           Int? // manually entered for external (non-tenant) facilities only
-  currentResidents   Int?     @map("current_residents") // self-reported occupancy — external facilities only, since tenant-linked ones compute this live from real Residents
-  careLevelsAccepted String?  @map("care_levels_accepted") // free text, e.g. "Level 1-2"
+  id                      String    @id @default(uuid())
+  name                    String
+  address                 String?
+  contactName             String?   @map("contact_name")
+  contactPhone            String?   @map("contact_phone")
+  contactEmail            String?   @map("contact_email")
+  capacity                Int? // manually entered for external (non-tenant) facilities only
+  currentResidents        Int?      @map("current_residents") // self-reported occupancy — external facilities only, since tenant-linked ones compute this live from real Residents
+  careLevelsAccepted      String?   @map("care_levels_accepted") // free text, e.g. "Level 1-2"
   // Cultural/language fit is CareFit's actual differentiator as a placement
   // agency (per carefitconnect.com: "culturally intelligent placement,"
   // matching on language/faith/traditions, not just price/location/care
   // level) — free text, e.g. "Amharic-speaking staff; Ethiopian Orthodox household".
-  culturalNotes      String?  @map("cultural_notes") @db.Text
+  culturalNotes           String?   @map("cultural_notes") @db.Text
   // The fields below come from CareFit's real paper "Partnership Form" AFH
   // intake — kept as the ones that actually matter for matching a resident
   // (compliance/trust, payer fit, gender, specialty care, price) rather than
   // the form's full staffing/marketing detail, which belongs in `notes`.
-  licenseNumber          String?   @map("license_number")
-  licenseExpiryDate      DateTime? @map("license_expiry_date")
-  genderAccepted         String?   @map("gender_accepted") // male | female | both
-  specialtyCare          String?   @map("specialty_care") @db.Text // free text, e.g. "Dementia, Hospice, Bedbound/Hoyer Lift"
-  acceptsMedicaid        Boolean?  @map("accepts_medicaid")
-  medicaidManagedCareOrgs String?  @map("medicaid_managed_care_orgs") // e.g. "Molina, United, Amerigroup, CHPW"
-  privateRoomPricing     String?   @map("private_room_pricing") // free text range, e.g. "$3,200-$3,800/mo"
-  sharedRoomPricing      String?   @map("shared_room_pricing")
+  licenseNumber           String?   @map("license_number")
+  licenseExpiryDate       DateTime? @map("license_expiry_date")
+  genderAccepted          String?   @map("gender_accepted") // male | female | both
+  specialtyCare           String?   @map("specialty_care") @db.Text // free text, e.g. "Dementia, Hospice, Bedbound/Hoyer Lift"
+  acceptsMedicaid         Boolean?  @map("accepts_medicaid")
+  medicaidManagedCareOrgs String?   @map("medicaid_managed_care_orgs") // e.g. "Molina, United, Amerigroup, CHPW"
+  privateRoomPricing      String?   @map("private_room_pricing") // free text range, e.g. "$3,200-$3,800/mo"
+  sharedRoomPricing       String?   @map("shared_room_pricing")
   // Consent gate from the paper form ("do you give permission for CareFit
   // Connect to share your AFH info with referral partners or families?") —
   // a facility should never be surfaced to a prospective family without this.
-  okToShareWithFamilies  Boolean?  @map("ok_to_share_with_families")
+  okToShareWithFamilies   Boolean?  @map("ok_to_share_with_families")
   // Set when an external AFH submits itself via the public intake form
   // (see routes/publicIntake.js) rather than CareFit staff adding it —
   // reviewedAt stays null until an admin has actually looked at the
   // submission, and unreviewed facilities are excluded from the "Place"
   // picker so nobody gets placed somewhere CareFit hasn't verified.
-  submittedByFacility Boolean  @default(false) @map("submitted_by_facility")
-  reviewedAt          DateTime? @map("reviewed_at")
-  notes              String?  @db.Text
-  tenantId           String?  @map("tenant_id")
-  homeId             String?  @map("home_id")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  submittedByFacility     Boolean   @default(false) @map("submitted_by_facility")
+  reviewedAt              DateTime? @map("reviewed_at")
+  notes                   String?   @db.Text
+  tenantId                String?   @map("tenant_id")
+  homeId                  String?   @map("home_id")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
 
-  inquiries PlacementInquiry[]
+  placements Placement[]
 
   @@map("placement_facilities")
 }
 
-// A prospective resident CareFit is actively trying to place. Tracked
-// through a simple pipeline (new -> touring -> pending -> placed/declined).
-// Placing one only creates a real Resident record when the destination
-// facility is also a CareFit Connect tenant — otherwise this row is the
-// only record of the referral outcome.
-model PlacementInquiry {
-  id              String    @id @default(uuid())
-  residentName    String    @map("resident_name")
-  contactName     String?   @map("contact_name") // family member / POA, if not the resident themself
-  contactPhone    String?   @map("contact_phone")
-  contactEmail    String?   @map("contact_email")
-  referralSource  String?   @map("referral_source") // hospital, dshs_hca, family, self, other
-  careLevelNeeded String    @map("care_level_needed") // level_1 | level_2 | level_3
-  payerType       String    @map("payer_type") // private_pay | medicaid | split
+// A prospective resident CareFit is actively trying to place — the whole
+// lifecycle record from first contact through move-in and follow-up, not
+// just an initial inquiry (renamed from PlacementInquiry 2026-09-12 when the
+// feature grew from a flat status pipeline into a real staged workflow — see
+// PLACEMENT_STAGES in routes/placements.js). Placing one only creates a real
+// Resident record when the destination facility is also a CareFit Connect
+// tenant — otherwise this row is the only record of the referral outcome.
+model Placement {
+  id                  String  @id @default(uuid())
+  residentName        String  @map("resident_name")
+  contactName         String? @map("contact_name") // family member / POA, if not the resident themself
+  contactPhone        String? @map("contact_phone")
+  contactEmail        String? @map("contact_email")
+  referralSource      String? @map("referral_source") // hospital, dshs_hca, family, self, other
+  careLevelNeeded     String  @map("care_level_needed") // level_1 | level_2 | level_3
+  payerType           String  @map("payer_type") // private_pay | medicaid | split
   // Language/faith/cultural preference — the actual matching criteria
   // CareFit leads with, per carefitconnect.com; free text since it's a
   // conversation with the family, not a fixed list, e.g. "Amharic-speaking,
   // Ethiopian Orthodox preferred".
   culturalPreferences String? @map("cultural_preferences") @db.Text
-  urgency         String    @default("normal") // normal | urgent
-  notes           String?   @db.Text
-  status          String    @default("new") // new | touring | pending | placed | declined
-  declinedReason  String?   @map("declined_reason")
+  // Mirrors PlacementFacility.specialtyCare so matching can compare like
+  // for like, e.g. "Needs dementia care, non-ambulatory support".
+  specialtyCareNeeded String? @map("specialty_care_needed") @db.Text
+  urgency             String  @default("normal") // normal | urgent
+  notes               String? @db.Text
+  // Full lifecycle stage — see PLACEMENT_STAGES in routes/placements.js for
+  // the ordered list (NEW..CLOSED). Every transition is recorded in
+  // PlacementEvent below, so this column is always "the current stage," not
+  // the only record of how it got there.
+  stage               String  @default("NEW")
+  // Set only when stage = CLOSED — see CLOSURE_REASONS in routes/placements.js.
+  closureReason       String? @map("closure_reason")
+  assignedToId        String? @map("assigned_to_id")
 
   placedFacilityId String?   @map("placed_facility_id")
   placedResidentId String?   @map("placed_resident_id")
@@ -502,6 +515,31 @@ model PlacementInquiry {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   placedFacility PlacementFacility? @relation(fields: [placedFacilityId], references: [id])
+  assignedTo     User?              @relation(fields: [assignedToId], references: [id])
+  events         PlacementEvent[]
 
-  @@map("placement_inquiries")
+  @@map("placements")
+}
+
+// The audit trail / timeline for a Placement's lifecycle — every stage
+// change gets one append-only row here (written by lib/placementEvents.js's
+// recordTransition(), never edited or deleted). This is the only history
+// table in the schema; every other status field elsewhere in the app
+// (Employee.status, Resident.status, etc.) is a bare overwrite with no
+// history — Placement is deliberately different because the whole point of
+// this feature is tracking a multi-week, multi-party process end to end.
+model PlacementEvent {
+  id          String   @id @default(uuid())
+  placementId String   @map("placement_id")
+  fromStage   String?  @map("from_stage") // null for the very first event (creation)
+  toStage     String   @map("to_stage")
+  changedById String?  @map("changed_by_id") // null for system-generated transitions (e.g. the 2026-09-12 stage migration backfill)
+  note        String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  placement Placement @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  changedBy User?     @relation(fields: [changedById], references: [id])
+
+  @@index([placementId])
+  @@map("placement_events")
 }
