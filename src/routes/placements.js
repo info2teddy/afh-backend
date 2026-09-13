@@ -17,10 +17,28 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const multer = require("multer");
 const { prisma, requireAdmin } = require("../middleware/tenant");
 const { recordTransition } = require("../lib/placementEvents");
 const { createTasksForStage, createFirstFollowup, advanceFollowup, withStatus } = require("../lib/placementTasks");
 const router = express.Router();
+
+// Same accepted-type set as expenses.js's receipt uploads and onboarding's
+// document verification — the established pattern for "upload a document"
+// in this app.
+const ACCEPTED_DOCUMENT_TYPES = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!ACCEPTED_DOCUMENT_TYPES.has(file.mimetype)) {
+      return cb(new Error("Only PDF or image (PNG/JPEG/WEBP) files are supported."));
+    }
+    cb(null, true);
+  },
+});
+const DOCUMENT_CATEGORIES = ["family", "provider", "placement", "agreement", "other"];
+const COMMUNICATION_METHODS = ["call", "email", "message", "in_person", "other"];
 
 router.use(requireAdmin);
 
@@ -843,6 +861,107 @@ router.delete("/inquiries/:id", async (req, res) => {
 
   await prisma.placement.delete({ where: { id: placement.id } });
   res.status(204).end();
+});
+
+// --- Documents (Phase 4) ------------------------------------------------
+// GET /placements/inquiries/:id/documents — metadata only, not the file
+// itself (see GET /documents/:id/file below), same split as expenses.js.
+router.get("/inquiries/:id/documents", async (req, res) => {
+  const documents = await prisma.placementDocument.findMany({
+    where: { placementId: req.params.id },
+    select: {
+      id: true,
+      category: true,
+      name: true,
+      mimeType: true,
+      required: true,
+      createdAt: true,
+      uploadedBy: { select: { id: true, email: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json(documents);
+});
+
+// POST /placements/inquiries/:id/documents — upload one.
+router.post("/inquiries/:id/documents", documentUpload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "A file is required." });
+  const { category, required } = req.body;
+  if (!category || !DOCUMENT_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: `category must be one of: ${DOCUMENT_CATEGORIES.join(", ")}` });
+  }
+
+  const document = await prisma.placementDocument.create({
+    data: {
+      placementId: req.params.id,
+      category,
+      name: req.file.originalname,
+      mimeType: req.file.mimetype,
+      data: req.file.buffer,
+      required: required === true || required === "true",
+      uploadedById: req.userId,
+    },
+    select: { id: true, category: true, name: true, mimeType: true, required: true, createdAt: true },
+  });
+  res.status(201).json(document);
+});
+
+// GET /placements/documents/:id/file — the raw uploaded file.
+router.get("/documents/:id/file", async (req, res) => {
+  const document = await prisma.placementDocument.findUnique({ where: { id: req.params.id } });
+  if (!document) return res.status(404).json({ error: "Document not found." });
+  res.set("Content-Type", document.mimeType);
+  res.set("Content-Disposition", `inline; filename="${document.name}"`);
+  res.send(document.data);
+});
+
+// DELETE /placements/documents/:id
+router.delete("/documents/:id", async (req, res) => {
+  const document = await prisma.placementDocument.findUnique({ where: { id: req.params.id } });
+  if (!document) return res.status(404).json({ error: "Document not found." });
+  await prisma.placementDocument.delete({ where: { id: document.id } });
+  res.status(204).end();
+});
+
+// --- Communications (Phase 4) -------------------------------------------
+// A manual log, not a real telephony/email integration — see the model
+// comment in schema.prisma for why.
+// GET /placements/inquiries/:id/communications
+router.get("/inquiries/:id/communications", async (req, res) => {
+  const communications = await prisma.placementCommunication.findMany({
+    where: { placementId: req.params.id },
+    include: { loggedBy: { select: { id: true, email: true } } },
+    orderBy: { occurredAt: "desc" },
+  });
+  res.json(communications);
+});
+
+// POST /placements/inquiries/:id/communications — log one.
+router.post("/inquiries/:id/communications", async (req, res) => {
+  const { method, summary, occurredAt } = req.body;
+  if (!method || !COMMUNICATION_METHODS.includes(method)) {
+    return res.status(400).json({ error: `method must be one of: ${COMMUNICATION_METHODS.join(", ")}` });
+  }
+  if (!summary?.trim()) return res.status(400).json({ error: "summary is required." });
+
+  const communication = await prisma.placementCommunication.create({
+    data: {
+      placementId: req.params.id,
+      method,
+      summary: summary.trim(),
+      loggedById: req.userId,
+      occurredAt: occurredAt ? new Date(occurredAt) : new Date(),
+    },
+    include: { loggedBy: { select: { id: true, email: true } } },
+  });
+  res.status(201).json(communication);
+});
+
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError || err.message?.includes("PDF or image")) {
+    return res.status(400).json({ error: err.message });
+  }
+  next(err);
 });
 
 module.exports = router;

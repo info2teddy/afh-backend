@@ -44,12 +44,14 @@ model User {
   role         String   @default("manager") // admin (you, cross-tenant) | manager (client staff)
   createdAt    DateTime @default(now()) @map("created_at")
 
-  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  residentNotes          ResidentNote[]
-  assignedPlacements     Placement[]
-  placementEvents        PlacementEvent[]
-  placementIntroductions PlacementIntroduction[]
-  placementTasks         PlacementTask[]
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  residentNotes           ResidentNote[]
+  assignedPlacements      Placement[]
+  placementEvents         PlacementEvent[]
+  placementIntroductions  PlacementIntroduction[]
+  placementTasks          PlacementTask[]
+  placementDocuments      PlacementDocument[]
+  placementCommunications PlacementCommunication[]
 
   @@index([tenantId])
   @@map("users")
@@ -533,6 +535,8 @@ model Placement {
   shortlist      PlacementShortlistEntry[]
   introductions  PlacementIntroduction[]
   tasks          PlacementTask[]
+  documents      PlacementDocument[]
+  communications PlacementCommunication[]
 
   @@map("placements")
 }
@@ -632,4 +636,49 @@ model PlacementTask {
 
   @@index([placementId])
   @@map("placement_tasks")
+}
+
+// A file attached to a placement (spec §23) — its own table, not a single
+// blob column, since a placement needs *several* documents over its
+// lifetime (like EmployeeOnboardingItem fans out one document per checklist
+// item). Stored directly in Postgres via Bytes, same as Expense.receiptData
+// and CarePlan.sourceDocumentData — served through a dedicated GET
+// .../file route the same way those are.
+model PlacementDocument {
+  id           String   @id @default(uuid())
+  placementId  String   @map("placement_id")
+  category     String // family | provider | placement | agreement | other
+  name         String
+  mimeType     String   @map("mime_type")
+  data         Bytes
+  required     Boolean  @default(false)
+  uploadedById String?  @map("uploaded_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  placement  Placement @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  uploadedBy User?     @relation(fields: [uploadedById], references: [id])
+
+  @@index([placementId])
+  @@map("placement_documents")
+}
+
+// A manual log of a call/email/message/meeting about a placement (spec
+// §22). Deliberately NOT an automatic capture of real calls/emails —
+// nothing in this app places or receives either, so this is a place for
+// staff to write down what happened, the same honest "log it yourself"
+// approach as ResidentNote elsewhere in this schema.
+model PlacementCommunication {
+  id          String   @id @default(uuid())
+  placementId String   @map("placement_id")
+  method      String // call | email | message | in_person | other
+  summary     String   @db.Text
+  loggedById  String?  @map("logged_by_id")
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  placement Placement @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  loggedBy  User?     @relation(fields: [loggedById], references: [id])
+
+  @@index([placementId])
+  @@map("placement_communications")
 }
