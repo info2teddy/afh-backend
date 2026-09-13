@@ -71,4 +71,42 @@ router.post("/afh-intake", async (req, res) => {
   res.status(201).json({ ok: true, name: facility.name });
 });
 
+// GET /placement-review/:token — the family-facing Family Review link (see
+// placements.js's POST/DELETE .../share). Deliberately NOT a full public
+// page: the token is opaque/unguessable, expires after 30 days, and staff
+// can revoke it anytime — this is the only way in, there's no listing route.
+// Only shows shortlisted facilities that have explicitly consented to
+// family sharing (okToShareWithFamilies) and only family-safe fields — no
+// internal staff notes, no match scores/criteria.
+router.get("/placement-review/:token", async (req, res) => {
+  const placement = await prisma.placement.findUnique({ where: { shareToken: req.params.token } });
+  if (!placement || !placement.shareTokenExpiresAt || placement.shareTokenExpiresAt < new Date()) {
+    return res.status(404).json({ error: "This link is no longer valid — ask CareFit for a new one." });
+  }
+
+  const entries = await prisma.placementShortlistEntry.findMany({
+    where: { placementId: placement.id },
+    include: { facility: true },
+    orderBy: { rank: "asc" },
+  });
+
+  const facilities = entries
+    .filter((e) => e.facility.okToShareWithFamilies === true)
+    .map((e) => ({
+      id: e.facility.id,
+      name: e.facility.name,
+      address: e.facility.address,
+      careLevelsAccepted: e.facility.careLevelsAccepted,
+      specialtyCare: e.facility.specialtyCare,
+      culturalNotes: e.facility.culturalNotes,
+      genderAccepted: e.facility.genderAccepted,
+      privateRoomPricing: e.facility.privateRoomPricing,
+      sharedRoomPricing: e.facility.sharedRoomPricing,
+      contactName: e.facility.contactName,
+      contactPhone: e.facility.contactPhone,
+    }));
+
+  res.json({ residentName: placement.residentName, facilities });
+});
+
 module.exports = router;

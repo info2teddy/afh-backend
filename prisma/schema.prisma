@@ -44,10 +44,11 @@ model User {
   role         String   @default("manager") // admin (you, cross-tenant) | manager (client staff)
   createdAt    DateTime @default(now()) @map("created_at")
 
-  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  residentNotes      ResidentNote[]
-  assignedPlacements Placement[]
-  placementEvents    PlacementEvent[]
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  residentNotes          ResidentNote[]
+  assignedPlacements     Placement[]
+  placementEvents        PlacementEvent[]
+  placementIntroductions PlacementIntroduction[]
 
   @@index([tenantId])
   @@map("users")
@@ -467,7 +468,9 @@ model PlacementFacility {
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")
 
-  placements Placement[]
+  placements    Placement[]
+  shortlistedOn PlacementShortlistEntry[]
+  introductions PlacementIntroduction[]
 
   @@map("placement_facilities")
 }
@@ -507,6 +510,15 @@ model Placement {
   closureReason       String? @map("closure_reason")
   assignedToId        String? @map("assigned_to_id")
 
+  // Family Review sharing (Phase 2) — an opaque, unguessable link a family
+  // can open without a CareFit Connect login, showing only the shortlisted
+  // facilities that have consented to family sharing (okToShareWithFamilies).
+  // Deliberately NOT a permanent public page: it expires and staff can
+  // revoke/regenerate it anytime (see POST/DELETE /placements/:id/share) —
+  // "controlled," not "completely public."
+  shareToken          String?   @unique @map("share_token")
+  shareTokenExpiresAt DateTime? @map("share_token_expires_at")
+
   placedFacilityId String?   @map("placed_facility_id")
   placedResidentId String?   @map("placed_resident_id")
   placedAt         DateTime? @map("placed_at")
@@ -514,9 +526,11 @@ model Placement {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  placedFacility PlacementFacility? @relation(fields: [placedFacilityId], references: [id])
-  assignedTo     User?              @relation(fields: [assignedToId], references: [id])
+  placedFacility PlacementFacility?        @relation(fields: [placedFacilityId], references: [id])
+  assignedTo     User?                     @relation(fields: [assignedToId], references: [id])
   events         PlacementEvent[]
+  shortlist      PlacementShortlistEntry[]
+  introductions  PlacementIntroduction[]
 
   @@map("placements")
 }
@@ -542,4 +556,51 @@ model PlacementEvent {
 
   @@index([placementId])
   @@map("placement_events")
+}
+
+// A facility staff has picked as a candidate for a placement, in ranked
+// order — the working list built during MATCHING, sent to the family during
+// FAMILY_REVIEW. Reorder/remove is just updating/deleting these rows.
+model PlacementShortlistEntry {
+  id          String   @id @default(uuid())
+  placementId String   @map("placement_id")
+  facilityId  String   @map("facility_id")
+  rank        Int      @default(0)
+  addedAt     DateTime @default(now()) @map("added_at")
+
+  placement Placement         @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  facility  PlacementFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+
+  @@unique([placementId, facilityId])
+  @@index([placementId])
+  @@map("placement_shortlist_entries")
+}
+
+// One introduction between a family and a shortlisted facility, and the
+// decision that came out of it — see spec §14/§15. Never deleted or
+// overwritten into a single "current" record: a placement can go through
+// several introductions (declines, second opinions) and each stays in the
+// timeline. The stage transition on decision (both accept -> CONFIRMED,
+// either declines -> back to SHORTLISTED) is handled by recordTransition()
+// in routes/placements.js, same as every other stage change.
+model PlacementIntroduction {
+  id               String    @id @default(uuid())
+  placementId      String    @map("placement_id")
+  facilityId       String    @map("facility_id")
+  staffId          String?   @map("staff_id")
+  scheduledAt      DateTime? @map("scheduled_at")
+  method           String? // phone | in_person | video | tour
+  notes            String?   @db.Text
+  outcome          String? // interested | needs_followup | declined | scheduled_visit | completed
+  familyDecision   String?   @map("family_decision") // accept | decline | need_another_option
+  providerDecision String?   @map("provider_decision") // accept | decline | need_more_info
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  placement Placement         @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  facility  PlacementFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staff     User?             @relation(fields: [staffId], references: [id])
+
+  @@index([placementId])
+  @@map("placement_introductions")
 }

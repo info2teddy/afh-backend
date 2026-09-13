@@ -16,6 +16,7 @@
 // "next best action" hint.
 
 const express = require("express");
+const crypto = require("crypto");
 const { prisma, requireAdmin } = require("../middleware/tenant");
 const { recordTransition } = require("../lib/placementEvents");
 const router = express.Router();
@@ -69,6 +70,64 @@ function nextActionForStage(stage) {
   return { message: MESSAGES[stage] || null };
 }
 
+// --- Matching (Phase 2) ---------------------------------------------
+// A real, deterministic, explainable score — never an ML-style confidence
+// number. Each criterion below is either applicable or not (both sides have
+// real data to compare) and either matched or not; the score is just
+// matched/applicable, so every point is traceable to the same checklist the
+// UI shows under "Why this match?" (spec §11). Deliberately NO distance/
+// location scoring — there's no geocoding anywhere in this app (see the
+// plan doc) — and NO gender criterion, since neither Placement nor Resident
+// has a gender field to compare against; inventing one would be exactly the
+// kind of fabricated precision this project has always avoided.
+function tokenize(text) {
+  return (text || "").toLowerCase().match(/[a-z]{3,}/g) || [];
+}
+const MATCH_STOPWORDS = new Set(["the", "and", "with", "needs", "need", "care", "support", "preferred", "speaking", "household"]);
+function keywordOverlap(haystack, needle) {
+  const haystackWords = new Set(tokenize(haystack).filter((w) => !MATCH_STOPWORDS.has(w)));
+  return tokenize(needle)
+    .filter((w) => !MATCH_STOPWORDS.has(w))
+    .some((w) => haystackWords.has(w));
+}
+
+function buildMatchCriteria(placement, facility) {
+  const criteria = [];
+
+  if (facility.careLevelsAccepted) {
+    const levelDigit = placement.careLevelNeeded?.replace("level_", "");
+    criteria.push({
+      key: "careLevel",
+      label: "Accepts the required level of care",
+      matched: levelDigit ? facility.careLevelsAccepted.toLowerCase().includes(levelDigit) : false,
+    });
+  }
+  if (placement.payerType !== "private_pay" && facility.acceptsMedicaid != null) {
+    criteria.push({ key: "medicaid", label: "Accepts Medicaid", matched: facility.acceptsMedicaid === true });
+  }
+  if (placement.culturalPreferences && facility.culturalNotes) {
+    criteria.push({
+      key: "cultural",
+      label: "Matches language / faith / cultural preference",
+      matched: keywordOverlap(facility.culturalNotes, placement.culturalPreferences),
+    });
+  }
+  if (placement.specialtyCareNeeded && facility.specialtyCare) {
+    criteria.push({
+      key: "specialty",
+      label: "Supports the specialty care needed",
+      matched: keywordOverlap(facility.specialtyCare, placement.specialtyCareNeeded),
+    });
+  }
+
+  const applicable = criteria.length;
+  const matchedCount = criteria.filter((c) => c.matched).length;
+  // null (not a fake 0%) when nothing could actually be compared — e.g. a
+  // brand-new facility record with none of the optional fields filled in.
+  const score = applicable > 0 ? Math.round((matchedCount / applicable) * 100) : null;
+  return { criteria, score };
+}
+
 // Keeps PlacementFacility rows in sync with real Homes, lazily — any Home
 // across any tenant that doesn't already have a linked facility gets one
 // created automatically, so an admin never has to manually re-enter a home
@@ -89,10 +148,10 @@ async function syncFacilitiesFromTenants() {
   });
 }
 
-// GET /placements/facilities — every facility CareFit places into, with live
-// occupancy for tenant-linked ones and the manually-entered capacity for
-// external ones.
-router.get("/facilities", async (req, res) => {
+// Shared by GET /facilities and GET /inquiries/:id/matches — every facility
+// CareFit places into, with live occupancy for tenant-linked ones and the
+// manually-entered capacity for external ones.
+async function getFacilitiesWithCapacity() {
   await syncFacilitiesFromTenants();
 
   const facilities = await prisma.placementFacility.findMany({ orderBy: { name: "asc" } });
@@ -113,7 +172,7 @@ router.get("/facilities", async (req, res) => {
   });
   const tenantNameById = new Map(tenants.map((t) => [t.id, t.name]));
 
-  const withCapacity = facilities.map((f) => {
+  return facilities.map((f) => {
     const isTenantLinked = !!f.homeId;
     const occupied = isTenantLinked ? occupiedByHome.get(f.homeId) || 0 : f.currentResidents ?? null;
     const capacity = f.capacity;
@@ -146,8 +205,13 @@ router.get("/facilities", async (req, res) => {
       pendingReview: f.submittedByFacility && !f.reviewedAt,
     };
   });
+}
 
-  res.json(withCapacity);
+// GET /placements/facilities — every facility CareFit places into, with live
+// occupancy for tenant-linked ones and the manually-entered capacity for
+// external ones.
+router.get("/facilities", async (req, res) => {
+  res.json(await getFacilitiesWithCapacity());
 });
 
 const FACILITY_FIELDS = [
@@ -301,6 +365,232 @@ router.get("/inquiries/:id/events", async (req, res) => {
   res.json(events);
 });
 
+// GET /placements/inquiries/:id/matches — ranked candidate facilities. Hard
+// filters (excluded entirely, not just scored low): explicitly full
+// (openBeds === 0, only when it's actually known) and explicitly no
+// Medicaid when the placement needs it. Everything else is a soft, scored
+// criterion — see buildMatchCriteria above.
+router.get("/inquiries/:id/matches", async (req, res) => {
+  const placement = await prisma.placement.findUnique({ where: { id: req.params.id } });
+  if (!placement) return res.status(404).json({ error: "Placement not found." });
+
+  const facilities = await getFacilitiesWithCapacity();
+  const eligible = facilities.filter((f) => {
+    if (f.openBeds === 0) return false;
+    if (placement.payerType !== "private_pay" && f.acceptsMedicaid === false) return false;
+    return true;
+  });
+
+  const matches = eligible
+    .map((f) => ({ facility: f, ...buildMatchCriteria(placement, f) }))
+    .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.facility.openBeds ?? 0) - (a.facility.openBeds ?? 0));
+
+  res.json(matches);
+});
+
+// --- Shortlist (Phase 2) ---------------------------------------------
+// GET /placements/inquiries/:id/shortlist
+router.get("/inquiries/:id/shortlist", async (req, res) => {
+  const entries = await prisma.placementShortlistEntry.findMany({
+    where: { placementId: req.params.id },
+    include: { facility: true },
+    orderBy: { rank: "asc" },
+  });
+  res.json(entries);
+});
+
+// POST /placements/inquiries/:id/shortlist — add a facility, appended to the end.
+router.post("/inquiries/:id/shortlist", async (req, res) => {
+  const { facilityId } = req.body;
+  if (!facilityId) return res.status(400).json({ error: "facilityId is required." });
+
+  const facility = await prisma.placementFacility.findUnique({ where: { id: facilityId } });
+  if (!facility) return res.status(404).json({ error: "Facility not found." });
+
+  const maxRank = await prisma.placementShortlistEntry.aggregate({
+    where: { placementId: req.params.id },
+    _max: { rank: true },
+  });
+
+  const entry = await prisma.placementShortlistEntry
+    .create({
+      data: { placementId: req.params.id, facilityId, rank: (maxRank._max.rank ?? -1) + 1 },
+      include: { facility: true },
+    })
+    .catch((err) => {
+      if (err.code === "P2002") return null; // already shortlisted
+      throw err;
+    });
+  if (!entry) return res.status(400).json({ error: "This facility is already shortlisted." });
+
+  res.status(201).json(entry);
+});
+
+// PATCH /placements/inquiries/:id/shortlist/reorder — body: { facilityIds: [...] }
+// in the new display order.
+router.patch("/inquiries/:id/shortlist/reorder", async (req, res) => {
+  const { facilityIds } = req.body;
+  if (!Array.isArray(facilityIds)) return res.status(400).json({ error: "facilityIds must be an array." });
+
+  await prisma.$transaction(
+    facilityIds.map((facilityId, rank) =>
+      prisma.placementShortlistEntry.updateMany({
+        where: { placementId: req.params.id, facilityId },
+        data: { rank },
+      })
+    )
+  );
+  const entries = await prisma.placementShortlistEntry.findMany({
+    where: { placementId: req.params.id },
+    include: { facility: true },
+    orderBy: { rank: "asc" },
+  });
+  res.json(entries);
+});
+
+// DELETE /placements/inquiries/:id/shortlist/:facilityId
+router.delete("/inquiries/:id/shortlist/:facilityId", async (req, res) => {
+  await prisma.placementShortlistEntry.deleteMany({
+    where: { placementId: req.params.id, facilityId: req.params.facilityId },
+  });
+  res.status(204).end();
+});
+
+// --- Family Review sharing (Phase 2) ----------------------------------
+// POST /placements/inquiries/:id/share — (re)generate the family-facing
+// link, replacing any previous one (old links stop working immediately).
+// Expires in 30 days; DELETE below revokes it outright.
+router.post("/inquiries/:id/share", async (req, res) => {
+  const placement = await prisma.placement.findUnique({ where: { id: req.params.id } });
+  if (!placement) return res.status(404).json({ error: "Placement not found." });
+
+  const shareToken = crypto.randomBytes(24).toString("hex");
+  const shareTokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const updated = await prisma.placement.update({
+    where: { id: placement.id },
+    data: { shareToken, shareTokenExpiresAt },
+  });
+  res.json({ shareToken: updated.shareToken, shareTokenExpiresAt: updated.shareTokenExpiresAt });
+});
+
+// DELETE /placements/inquiries/:id/share — revoke immediately.
+router.delete("/inquiries/:id/share", async (req, res) => {
+  await prisma.placement.update({
+    where: { id: req.params.id },
+    data: { shareToken: null, shareTokenExpiresAt: null },
+  });
+  res.status(204).end();
+});
+
+// --- Introductions & decisions (Phase 2) ------------------------------
+// GET /placements/inquiries/:id/introductions
+router.get("/inquiries/:id/introductions", async (req, res) => {
+  const introductions = await prisma.placementIntroduction.findMany({
+    where: { placementId: req.params.id },
+    include: { facility: { select: { name: true } }, staff: { select: { id: true, email: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json(introductions);
+});
+
+const INTRO_METHODS = ["phone", "in_person", "video", "tour"];
+const INTRO_OUTCOMES = ["interested", "needs_followup", "declined", "scheduled_visit", "completed"];
+const FAMILY_DECISIONS = ["accept", "decline", "need_another_option"];
+const PROVIDER_DECISIONS = ["accept", "decline", "need_more_info"];
+
+// POST /placements/inquiries/:id/introductions — schedule/log one.
+router.post("/inquiries/:id/introductions", async (req, res) => {
+  const { facilityId, scheduledAt, method, notes } = req.body;
+  if (!facilityId) return res.status(400).json({ error: "facilityId is required." });
+  if (method && !INTRO_METHODS.includes(method)) {
+    return res.status(400).json({ error: `method must be one of: ${INTRO_METHODS.join(", ")}` });
+  }
+  const facility = await prisma.placementFacility.findUnique({ where: { id: facilityId } });
+  if (!facility) return res.status(404).json({ error: "Facility not found." });
+
+  const intro = await prisma.placementIntroduction.create({
+    data: {
+      placementId: req.params.id,
+      facilityId,
+      staffId: req.userId,
+      scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+      method: method || null,
+      notes: notes || null,
+    },
+    include: { facility: { select: { name: true } }, staff: { select: { id: true, email: true } } },
+  });
+  res.status(201).json(intro);
+});
+
+// PATCH /placements/introductions/:id — update outcome/decisions. When both
+// sides accept, the placement auto-advances to CONFIRMED (spec §15) — this
+// only sets placedFacilityId as a pointer, it does NOT create a Resident or
+// require a move-in date yet; that still happens via POST .../place, same
+// as Phase 1. When either side declines, the placement returns to
+// SHORTLISTED so staff can try another candidate without losing history.
+router.patch("/introductions/:id", async (req, res) => {
+  const intro = await prisma.placementIntroduction.findUnique({
+    where: { id: req.params.id },
+    include: { placement: true, facility: true },
+  });
+  if (!intro) return res.status(404).json({ error: "Introduction not found." });
+
+  const { scheduledAt, method, notes, outcome, familyDecision, providerDecision } = req.body;
+  if (method !== undefined && method && !INTRO_METHODS.includes(method)) {
+    return res.status(400).json({ error: `method must be one of: ${INTRO_METHODS.join(", ")}` });
+  }
+  if (outcome !== undefined && outcome && !INTRO_OUTCOMES.includes(outcome)) {
+    return res.status(400).json({ error: `outcome must be one of: ${INTRO_OUTCOMES.join(", ")}` });
+  }
+  if (familyDecision !== undefined && familyDecision && !FAMILY_DECISIONS.includes(familyDecision)) {
+    return res.status(400).json({ error: `familyDecision must be one of: ${FAMILY_DECISIONS.join(", ")}` });
+  }
+  if (providerDecision !== undefined && providerDecision && !PROVIDER_DECISIONS.includes(providerDecision)) {
+    return res.status(400).json({ error: `providerDecision must be one of: ${PROVIDER_DECISIONS.join(", ")}` });
+  }
+
+  const data = {};
+  if (scheduledAt !== undefined) data.scheduledAt = scheduledAt ? new Date(scheduledAt) : null;
+  if (method !== undefined) data.method = method || null;
+  if (notes !== undefined) data.notes = notes || null;
+  if (outcome !== undefined) data.outcome = outcome || null;
+  if (familyDecision !== undefined) data.familyDecision = familyDecision || null;
+  if (providerDecision !== undefined) data.providerDecision = providerDecision || null;
+
+  const updated = await prisma.placementIntroduction.update({ where: { id: intro.id }, data });
+
+  const resolvedFamily = "familyDecision" in data ? data.familyDecision : intro.familyDecision;
+  const resolvedProvider = "providerDecision" in data ? data.providerDecision : intro.providerDecision;
+  const currentStage = intro.placement.stage;
+
+  if (resolvedFamily === "accept" && resolvedProvider === "accept" && currentStage !== "CONFIRMED") {
+    await prisma.placement.update({
+      where: { id: intro.placementId },
+      data: { stage: "CONFIRMED", placedFacilityId: intro.facilityId },
+    });
+    await recordTransition(intro.placementId, {
+      fromStage: currentStage,
+      toStage: "CONFIRMED",
+      changedById: req.userId,
+      note: `Family and ${intro.facility.name} both accepted`,
+    });
+  } else if (
+    (resolvedFamily === "decline" || resolvedProvider === "decline") &&
+    currentStage !== "SHORTLISTED" &&
+    !["CONFIRMED", "MOVE_IN_SCHEDULED", "ACTIVE", "FOLLOW_UP", "COMPLETED"].includes(currentStage)
+  ) {
+    await prisma.placement.update({ where: { id: intro.placementId }, data: { stage: "SHORTLISTED" } });
+    await recordTransition(intro.placementId, {
+      fromStage: currentStage,
+      toStage: "SHORTLISTED",
+      changedById: req.userId,
+      note: `${resolvedFamily === "decline" ? "Family" : intro.facility.name} declined`,
+    });
+  }
+
+  res.json(updated);
+});
+
 // POST /placements/inquiries — log a new prospective-resident placement.
 router.post("/inquiries", async (req, res) => {
   const {
@@ -396,9 +686,13 @@ router.patch("/inquiries/:id", async (req, res) => {
 router.post("/inquiries/:id/place", async (req, res) => {
   const placement = await prisma.placement.findUnique({ where: { id: req.params.id } });
   if (!placement) return res.status(404).json({ error: "Placement not found." });
-  if (placement.placedFacilityId) return res.status(400).json({ error: "This placement has already been placed." });
+  if (placement.placedAt) return res.status(400).json({ error: "This placement has already been placed." });
 
-  const { facilityId, moveInDate, room, medicaidSplitPct, dateOfBirth } = req.body;
+  // Falls back to the facility a decision already agreed on (see PATCH
+  // /introductions/:id), so finalizing after a decision doesn't require
+  // re-picking the same facility.
+  const { moveInDate, room, medicaidSplitPct, dateOfBirth } = req.body;
+  const facilityId = req.body.facilityId || placement.placedFacilityId;
   if (!facilityId) return res.status(400).json({ error: "facilityId is required." });
 
   const facility = await prisma.placementFacility.findUnique({ where: { id: facilityId } });
@@ -455,14 +749,17 @@ router.post("/inquiries/:id/place", async (req, res) => {
   res.json(withNextAction(updated));
 });
 
-// DELETE /placements/inquiries/:id — only before a facility has been set.
-// Once placed (CONFIRMED/COMPLETED via /place), it's the historical record
-// of a real referral outcome (and may point at a real Resident), so it
-// can't be removed — same "gone consequential, can't undo" rule as invoices.
+// DELETE /placements/inquiries/:id — only before it's actually been placed
+// (POST .../place). A decision-accepted-but-not-yet-finalized placement
+// (placedFacilityId set, placedAt still null) can still be deleted — close
+// it instead if you want to preserve the history. Once placed, it's the
+// historical record of a real referral outcome (and may point at a real
+// Resident), so it can't be removed — same "gone consequential, can't undo"
+// rule as invoices.
 router.delete("/inquiries/:id", async (req, res) => {
   const placement = await prisma.placement.findUnique({ where: { id: req.params.id } });
   if (!placement) return res.status(404).json({ error: "Placement not found." });
-  if (placement.placedFacilityId) {
+  if (placement.placedAt) {
     return res.status(400).json({ error: "This placement has already been placed and can't be deleted — close it instead if it was placed in error." });
   }
 
