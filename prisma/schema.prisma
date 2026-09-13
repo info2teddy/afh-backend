@@ -49,6 +49,7 @@ model User {
   assignedPlacements     Placement[]
   placementEvents        PlacementEvent[]
   placementIntroductions PlacementIntroduction[]
+  placementTasks         PlacementTask[]
 
   @@index([tenantId])
   @@map("users")
@@ -531,6 +532,7 @@ model Placement {
   events         PlacementEvent[]
   shortlist      PlacementShortlistEntry[]
   introductions  PlacementIntroduction[]
+  tasks          PlacementTask[]
 
   @@map("placements")
 }
@@ -603,4 +605,31 @@ model PlacementIntroduction {
 
   @@index([placementId])
   @@map("placement_introductions")
+}
+
+// A to-do tied to a placement — covers spec §17 (move-in checklist, `type:
+// "move_in_checklist"`), §19 (follow-up check-ins, `type: "followup_48h" |
+// "followup_7d" | "followup_30d"`), and §21 (general lifecycle tasks like
+// "review matches"). One model, not three, since they're all "a titled
+// to-do with a due date on a placement" — distinguished by `type` for
+// grouping in the UI. Status is computed (done/overdue/pending), never
+// stored, matching EmployeeOnboardingItem's convention — the closest
+// existing analog in this codebase to a checklist engine.
+model PlacementTask {
+  id           String    @id @default(uuid())
+  placementId  String    @map("placement_id")
+  type         String
+  title        String
+  dueDate      DateTime? @map("due_date")
+  completedAt  DateTime? @map("completed_at")
+  assignedToId String?   @map("assigned_to_id")
+  priority     String    @default("normal") // normal | high
+  notes        String?   @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  placement  Placement @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  assignedTo User?     @relation(fields: [assignedToId], references: [id])
+
+  @@index([placementId])
+  @@map("placement_tasks")
 }

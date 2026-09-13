@@ -19,6 +19,7 @@ const express = require("express");
 const crypto = require("crypto");
 const { prisma, requireAdmin } = require("../middleware/tenant");
 const { recordTransition } = require("../lib/placementEvents");
+const { createTasksForStage, createFirstFollowup, advanceFollowup, withStatus } = require("../lib/placementTasks");
 const router = express.Router();
 
 router.use(requireAdmin);
@@ -352,7 +353,18 @@ router.get("/inquiries/:id", async (req, res) => {
     },
   });
   if (!placement) return res.status(404).json({ error: "Placement not found." });
-  res.json(withNextAction(placement));
+
+  // Next Best Action gets sharper here than on the list (which stays
+  // stage-only to keep that query cheap): if there's a real open task,
+  // surface the most urgent one (overdue first, then earliest due) instead
+  // of the generic stage message.
+  const openTasks = (await prisma.placementTask.findMany({ where: { placementId: placement.id, completedAt: null } })).map(withStatus);
+  const result = withNextAction(placement);
+  const mostUrgent = openTasks.find((t) => t.status === "overdue") || openTasks.sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0))[0];
+  if (mostUrgent) {
+    result.nextAction = { message: mostUrgent.title, taskId: mostUrgent.id, overdue: mostUrgent.status === "overdue" };
+  }
+  res.json(result);
 });
 
 // GET /placements/inquiries/:id/events — the timeline/audit trail.
@@ -363,6 +375,49 @@ router.get("/inquiries/:id/events", async (req, res) => {
     orderBy: { createdAt: "asc" },
   });
   res.json(events);
+});
+
+// --- Tasks (Phase 3) ---------------------------------------------------
+// GET /placements/inquiries/:id/tasks — every to-do for this placement
+// (move-in checklist items, follow-ups, general lifecycle tasks — see
+// lib/placementTasks.js), with a computed status (done/overdue/pending).
+router.get("/inquiries/:id/tasks", async (req, res) => {
+  const tasks = await prisma.placementTask.findMany({
+    where: { placementId: req.params.id },
+    include: { assignedTo: { select: { id: true, email: true } } },
+    orderBy: [{ completedAt: "asc" }, { dueDate: "asc" }, { createdAt: "asc" }],
+  });
+  res.json(tasks.map(withStatus));
+});
+
+// PATCH /placements/tasks/:id — complete/reopen a task, or edit its due
+// date/priority/assignee/notes. Marking a follow-up task (type followup_*)
+// complete auto-creates the next one in the sequence (spec §19).
+router.patch("/tasks/:id", async (req, res) => {
+  const task = await prisma.placementTask.findUnique({ where: { id: req.params.id }, include: { placement: true } });
+  if (!task) return res.status(404).json({ error: "Task not found." });
+
+  const { completedAt, dueDate, priority, assignedToId, notes } = req.body;
+  if (priority !== undefined && priority && !["normal", "high"].includes(priority)) {
+    return res.status(400).json({ error: "priority must be one of: normal, high" });
+  }
+
+  const data = {};
+  if (completedAt !== undefined) data.completedAt = completedAt ? new Date(completedAt) : null;
+  if (dueDate !== undefined) data.dueDate = dueDate ? new Date(dueDate) : null;
+  if (priority !== undefined) data.priority = priority || "normal";
+  if (assignedToId !== undefined) data.assignedToId = assignedToId || null;
+  if (notes !== undefined) data.notes = notes || null;
+
+  const updated = await prisma.placementTask.update({ where: { id: task.id }, data });
+
+  const justCompleted = data.completedAt && !task.completedAt;
+  if (justCompleted && task.type.startsWith("followup_") && task.placement.placedResidentId) {
+    const resident = await prisma.resident.findUnique({ where: { id: task.placement.placedResidentId } });
+    if (resident) await advanceFollowup(task, resident.moveInDate);
+  }
+
+  res.json(withStatus(updated));
 });
 
 // GET /placements/inquiries/:id/matches — ranked candidate facilities. Hard
@@ -574,6 +629,7 @@ router.patch("/introductions/:id", async (req, res) => {
       changedById: req.userId,
       note: `Family and ${intro.facility.name} both accepted`,
     });
+    await createTasksForStage(intro.placementId, "CONFIRMED", { assignedToId: intro.placement.assignedToId });
   } else if (
     (resolvedFamily === "decline" || resolvedProvider === "decline") &&
     currentStage !== "SHORTLISTED" &&
@@ -586,6 +642,7 @@ router.patch("/introductions/:id", async (req, res) => {
       changedById: req.userId,
       note: `${resolvedFamily === "decline" ? "Family" : intro.facility.name} declined`,
     });
+    await createTasksForStage(intro.placementId, "SHORTLISTED", { assignedToId: intro.placement.assignedToId });
   }
 
   res.json(updated);
@@ -633,6 +690,7 @@ router.post("/inquiries", async (req, res) => {
     },
   });
   await recordTransition(placement.id, { fromStage: null, toStage: placement.stage, changedById: req.userId, note: "Placement created" });
+  await createTasksForStage(placement.id, placement.stage, {});
   res.status(201).json(withNextAction(placement));
 });
 
@@ -655,6 +713,20 @@ router.patch("/inquiries/:id", async (req, res) => {
     if (stage === "CONFIRMED" && placement.stage !== "CONFIRMED" && !placement.placedFacilityId) {
       return res.status(400).json({ error: "Use POST /placements/inquiries/:id/place to confirm a placement at a facility." });
     }
+    // Business rule (spec §30): can't become ACTIVE without a real move-in
+    // event — requires an actual Resident record whose move-in date has
+    // arrived, not just a stage flip. External-facility placements never
+    // reach ACTIVE at all (POST .../place sends them straight to COMPLETED
+    // since CareFit doesn't operate that home to confirm a real move-in).
+    if (stage === "ACTIVE" && placement.stage !== "ACTIVE") {
+      if (!placement.placedResidentId) {
+        return res.status(400).json({ error: "Active requires a real move-in — place this at a CareFit Connect facility with a move-in date first." });
+      }
+      const resident = await prisma.resident.findUnique({ where: { id: placement.placedResidentId } });
+      if (!resident || new Date(resident.moveInDate) > new Date()) {
+        return res.status(400).json({ error: "This resident's move-in date hasn't arrived yet." });
+      }
+    }
     data.stage = stage;
     data.closureReason = stage === "CLOSED" ? closureReason || placement.closureReason || null : null;
     transition = { fromStage: placement.stage, toStage: stage };
@@ -671,6 +743,11 @@ router.patch("/inquiries/:id", async (req, res) => {
   const updated = await prisma.placement.update({ where: { id: placement.id }, data });
   if (transition) {
     await recordTransition(placement.id, { ...transition, changedById: req.userId, note: note || null });
+    await createTasksForStage(placement.id, stage, { assignedToId: updated.assignedToId });
+    if (stage === "ACTIVE") {
+      const resident = await prisma.resident.findUnique({ where: { id: updated.placedResidentId } });
+      await createFirstFollowup(placement.id, resident.moveInDate, { assignedToId: updated.assignedToId });
+    }
   }
   res.json(withNextAction(updated));
 });
@@ -746,6 +823,7 @@ router.post("/inquiries/:id/place", async (req, res) => {
     changedById: req.userId,
     note: `Placed at ${facility.name}`,
   });
+  await createTasksForStage(placement.id, toStage, { assignedToId: updated.assignedToId });
   res.json(withNextAction(updated));
 });
 
