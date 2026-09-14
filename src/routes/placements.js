@@ -115,6 +115,22 @@ function keywordOverlap(haystack, needle) {
     .some((w) => haystackWords.has(w));
 }
 
+// careLevelsAccepted is free text (e.g. "Level 1-2", "2-3", "Level 2"), so a
+// plain substring check misses range notation — "Level 1-3" doesn't
+// literally contain the character "2" even though a home accepting that
+// range obviously accepts Level 2. Checks numeric ranges first, then falls
+// back to a literal digit match for single-level entries.
+function careLevelMatches(careLevelsAccepted, levelDigit) {
+  const text = (careLevelsAccepted || "").toLowerCase();
+  const target = Number(levelDigit);
+  const range = text.match(/(\d)\s*(?:-|to)\s*(\d)/);
+  if (range) {
+    const [, lo, hi] = range;
+    if (target >= Number(lo) && target <= Number(hi)) return true;
+  }
+  return text.includes(levelDigit);
+}
+
 function buildMatchCriteria(placement, facility) {
   const criteria = [];
 
@@ -123,7 +139,7 @@ function buildMatchCriteria(placement, facility) {
     criteria.push({
       key: "careLevel",
       label: "Accepts the required level of care",
-      matched: levelDigit ? facility.careLevelsAccepted.toLowerCase().includes(levelDigit) : false,
+      matched: levelDigit ? careLevelMatches(facility.careLevelsAccepted, levelDigit) : false,
     });
   }
   if (placement.payerType !== "private_pay" && facility.acceptsMedicaid != null) {
