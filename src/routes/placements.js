@@ -59,9 +59,13 @@ const PLACEMENT_STAGES = [
   "ACTIVE",
   "FOLLOW_UP",
   "COMPLETED",
+  // Exception states (spec §24) — reachable from anywhere, not normal rungs
+  // on the forward ladder. Excluded from the frontend's stepper the same
+  // way CLOSED already is.
+  "PAUSED",
   "CLOSED",
 ];
-const CLOSURE_REASONS = ["family_withdrew", "no_suitable_match", "provider_unavailable", "chose_another_provider", "duplicate", "other"];
+const CLOSURE_REASONS = ["family_withdrew", "no_suitable_match", "provider_unavailable", "chose_another_provider", "duplicate", "cancelled", "other"];
 const CARE_LEVELS = ["level_1", "level_2", "level_3"];
 const PAYER_TYPES = ["private_pay", "medicaid", "split"];
 
@@ -84,6 +88,7 @@ function nextActionForStage(stage) {
     ACTIVE: "Care has started. Move to Follow-up to begin post-placement check-ins.",
     FOLLOW_UP: "Post-placement follow-up is due.",
     COMPLETED: "Placement completed.",
+    PAUSED: "Placement paused. Pick a stage below to resume it.",
     CLOSED: "Placement closed.",
   };
   return { message: MESSAGES[stage] || null };
@@ -349,7 +354,73 @@ function withNextAction(placement) {
   return { ...placement, nextAction: nextActionForStage(placement.stage) };
 }
 
-// GET /placements/inquiries — the pipeline, most urgent/newest first.
+// Days without a stage change (or without a provider response) before a
+// still-in-progress placement counts as "needs attention" (spec §26).
+const NEEDS_ATTENTION_DAYS = 5;
+const STUCK_STAGES = ["DECISION_PENDING", "FAMILY_REVIEW", "INTRODUCTION"];
+
+// Powers the operational list (spec §25/§26): real per-placement fields
+// (next action, move-in date, last activity, needs-attention reasons)
+// computed in a handful of batched queries — never per-row — so the list
+// stays cheap regardless of how many placements exist.
+async function enrichPlacementsForList(placements) {
+  if (placements.length === 0) return [];
+  const ids = placements.map((p) => p.id);
+  const residentIds = placements.filter((p) => p.placedResidentId).map((p) => p.placedResidentId);
+
+  const [openTasks, lastEvents, introductions, residents] = await Promise.all([
+    prisma.placementTask.findMany({ where: { placementId: { in: ids }, completedAt: null } }),
+    prisma.placementEvent.groupBy({ by: ["placementId"], where: { placementId: { in: ids } }, _max: { createdAt: true } }),
+    prisma.placementIntroduction.findMany({ where: { placementId: { in: ids } }, include: { facility: { select: { name: true } } } }),
+    residentIds.length > 0 ? prisma.resident.findMany({ where: { id: { in: residentIds } }, select: { id: true, moveInDate: true } }) : [],
+  ]);
+
+  const tasksByPlacement = new Map();
+  for (const t of openTasks.map(withStatus)) {
+    if (!tasksByPlacement.has(t.placementId)) tasksByPlacement.set(t.placementId, []);
+    tasksByPlacement.get(t.placementId).push(t);
+  }
+  const lastActivityByPlacement = new Map(lastEvents.map((e) => [e.placementId, e._max.createdAt]));
+  const introsByPlacement = new Map();
+  for (const intro of introductions) {
+    if (!introsByPlacement.has(intro.placementId)) introsByPlacement.set(intro.placementId, []);
+    introsByPlacement.get(intro.placementId).push(intro);
+  }
+  const moveInDateByResident = new Map(residents.map((r) => [r.id, r.moveInDate]));
+
+  const now = new Date();
+  return placements.map((p) => {
+    const tasks = tasksByPlacement.get(p.id) || [];
+    const lastActivityAt = lastActivityByPlacement.get(p.id) || p.createdAt;
+    const intros = introsByPlacement.get(p.id) || [];
+    const moveInDate = p.placedResidentId ? moveInDateByResident.get(p.placedResidentId) || null : null;
+
+    const mostUrgentTask = tasks.find((t) => t.status === "overdue") || [...tasks].sort((a, b) => (a.dueDate || 0) - (b.dueDate || 0))[0];
+    const nextAction = mostUrgentTask
+      ? { message: mostUrgentTask.title, taskId: mostUrgentTask.id, overdue: mostUrgentTask.status === "overdue" }
+      : nextActionForStage(p.stage);
+
+    const daysSinceActivity = (now - new Date(lastActivityAt)) / (24 * 60 * 60 * 1000);
+    const needsAttention = [];
+    if (tasks.some((t) => t.status === "overdue")) needsAttention.push({ reason: "Task overdue", tone: "danger" });
+    if (p.urgency === "urgent" && !p.placedAt) needsAttention.push({ reason: "Urgent, not yet placed", tone: "danger" });
+    if (STUCK_STAGES.includes(p.stage) && daysSinceActivity >= NEEDS_ATTENTION_DAYS) {
+      needsAttention.push({ reason: `No activity in ${Math.floor(daysSinceActivity)} days`, tone: "warning" });
+    }
+    const pendingIntro = intros.find((i) => !i.providerDecision);
+    if (pendingIntro && (now - new Date(pendingIntro.createdAt)) / (24 * 60 * 60 * 1000) >= NEEDS_ATTENTION_DAYS) {
+      needsAttention.push({ reason: `${pendingIntro.facility.name} hasn't responded`, tone: "warning" });
+    }
+    if (tasks.some((t) => t.type.startsWith("followup_") && t.dueDate && new Date(t.dueDate).toDateString() === now.toDateString())) {
+      needsAttention.push({ reason: "Follow-up due today", tone: "warning" });
+    }
+
+    return { ...p, nextAction, lastActivityAt, moveInDate, needsAttention };
+  });
+}
+
+// GET /placements/inquiries — the operational list (spec §25), most urgent/
+// newest first.
 router.get("/inquiries", async (req, res) => {
   const placements = await prisma.placement.findMany({
     include: {
@@ -358,7 +429,7 @@ router.get("/inquiries", async (req, res) => {
     },
     orderBy: [{ urgency: "desc" }, { createdAt: "desc" }],
   });
-  res.json(placements.map(withNextAction));
+  res.json(await enrichPlacementsForList(placements));
 });
 
 // GET /placements/inquiries/:id — single placement, for the detail page.
@@ -842,6 +913,66 @@ router.post("/inquiries/:id/place", async (req, res) => {
     note: `Placed at ${facility.name}`,
   });
   await createTasksForStage(placement.id, toStage, { assignedToId: updated.assignedToId });
+  res.json(withNextAction(updated));
+});
+
+// --- Exceptions (Phase 5, spec §24) --------------------------------------
+// Pause/Reopen/Cancel/No Match are just PAUSED/CLOSED stage transitions
+// through the normal PATCH above — no dedicated endpoint needed, since
+// events are append-only and PATCH already allows moving to/from either
+// freely. Change Provider and Escalate get their own actions below because
+// they do more than flip a stage.
+
+// POST /placements/inquiries/:id/change-provider — swap which facility a
+// placement is heading to, before it's actually finalized (POST .../place).
+// Once placedAt is set, a real Resident may already exist elsewhere in the
+// app — changing the destination here wouldn't touch that record, so it's
+// blocked; close this placement and start a new one instead.
+router.post("/inquiries/:id/change-provider", async (req, res) => {
+  const placement = await prisma.placement.findUnique({ where: { id: req.params.id } });
+  if (!placement) return res.status(404).json({ error: "Placement not found." });
+  if (placement.placedAt) {
+    return res.status(400).json({ error: "This placement has already been finalized and can't change provider here." });
+  }
+  const { facilityId } = req.body;
+  if (!facilityId) return res.status(400).json({ error: "facilityId is required." });
+
+  const facility = await prisma.placementFacility.findUnique({ where: { id: facilityId } });
+  if (!facility) return res.status(404).json({ error: "Facility not found." });
+  const previousFacility = placement.placedFacilityId
+    ? await prisma.placementFacility.findUnique({ where: { id: placement.placedFacilityId } })
+    : null;
+
+  const updated = await prisma.placement.update({ where: { id: placement.id }, data: { placedFacilityId: facility.id } });
+  await recordTransition(placement.id, {
+    fromStage: placement.stage,
+    toStage: placement.stage,
+    changedById: req.userId,
+    note: `Provider changed${previousFacility ? ` from ${previousFacility.name}` : ""} to ${facility.name}`,
+  });
+  res.json(withNextAction(updated));
+});
+
+// POST /placements/inquiries/:id/escalate — flag for manager attention
+// (spec §24). Bumps urgency and creates a high-priority task rather than
+// inventing a separate escalation model — reuses the same PlacementTask/
+// PlacementEvent machinery everything else here already has.
+router.post("/inquiries/:id/escalate", async (req, res) => {
+  const placement = await prisma.placement.findUnique({ where: { id: req.params.id } });
+  if (!placement) return res.status(404).json({ error: "Placement not found." });
+  const { note } = req.body;
+  if (!note?.trim()) return res.status(400).json({ error: "A note is required to escalate." });
+
+  const updated = await prisma.placement.update({ where: { id: placement.id }, data: { urgency: "urgent" } });
+  await prisma.placementTask.create({
+    data: { placementId: placement.id, type: "escalation", title: note.trim(), priority: "high", assignedToId: placement.assignedToId },
+  });
+  await recordTransition(placement.id, {
+    fromStage: placement.stage,
+    toStage: placement.stage,
+    changedById: req.userId,
+    note: `Escalated: ${note.trim()}`,
+  });
   res.json(withNextAction(updated));
 });
 
