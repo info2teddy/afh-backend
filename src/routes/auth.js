@@ -124,6 +124,40 @@ function verifyAdminCaller(req, res) {
   return caller;
 }
 
+// PATCH /auth/change-password — any authenticated role (admin, manager,
+// kiosk) can change its own login's password; requires the current one, same
+// as login itself, since this isn't an admin-reset — it's the account owner
+// acting on their own account. No forgot-password/reset-link flow exists
+// yet (no email sending anywhere in this app) — that's a separate feature.
+router.patch("/change-password", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "Authentication required." });
+  let caller;
+  try {
+    caller = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired session." });
+  }
+
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: "currentPassword and newPassword are required." });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: "New password must be at least 8 characters." });
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: caller.userId } });
+  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    return res.status(401).json({ error: "Current password is incorrect." });
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+  res.status(204).end();
+});
+
 // GET /auth/users?tenantId=... — list logins for a tenant.
 router.get("/users", async (req, res) => {
   const caller = verifyAdminCaller(req, res);
