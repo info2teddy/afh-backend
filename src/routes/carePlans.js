@@ -12,7 +12,7 @@ const { prisma } = require("../middleware/tenant");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "claude-sonnet-5";
 
 // Uploaded reference documents (physician's orders, discharge summaries,
 // assessment forms) are small and occasional — kept in memory just long

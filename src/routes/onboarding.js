@@ -5,7 +5,7 @@ const { prisma } = require("../middleware/tenant");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "claude-sonnet-5";
 
 // Verification documents (IDs, certificates, background check letters) are
 // small and occasional — kept in memory just long enough to forward to the

@@ -16,7 +16,7 @@ const { evaluateWeeklyHours } = require("../lib/overtimeFlagging");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "claude-sonnet-5";
 
 const todayUTC = () => new Date(new Date().toISOString().slice(0, 10));
 function addDays(date, days) {

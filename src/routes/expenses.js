@@ -12,7 +12,7 @@ const { EXPENSE_CATEGORIES } = require("../lib/expenseConstants");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "claude-sonnet-5";
 
 const ACCEPTED_RECEIPT_TYPES = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
 const upload = multer({
