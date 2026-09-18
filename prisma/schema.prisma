@@ -63,6 +63,8 @@ model Home {
   name          String
   licenseNumber String   @map("license_number")
   address       String?
+  phone         String?
+  fax           String?
   capacity      Int
   qboLocationId String?  @map("qbo_location_id") // QuickBooks Location, for per-branch P&L
   createdAt     DateTime @default(now()) @map("created_at")
@@ -112,15 +114,59 @@ model Resident {
   authorizationStatus String?   @map("authorization_status") // pending | approved | denied — Medicaid/payer authorization, independent of `status`
   createdAt           DateTime  @default(now()) @map("created_at")
 
-  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home      Home           @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  // --- Face sheet fields (added for the printable AFH face sheet — see
+  // ResidentContact below for the emergency-contact/provider rows). `name`
+  // stays the one full-name field used everywhere else in the app (lists,
+  // search, invoices); `middleName` is the only name part not derivable
+  // from it, so that's the only name field added here — First/Last are
+  // split from `name` at render time for the face sheet only.
+  middleName              String? @map("middle_name")
+  socialSecurityNumber    String? @map("social_security_number")
+  dnrStatus               String? @map("dnr_status") // "yes" | "no" | null (unanswered)
+  advancedDirectivesType  String? @map("advanced_directives_type")
+  medicareNumber          String? @map("medicare_number")
+  medicaidNumber          String? @map("medicaid_number")
+  supplementaryInsurance  String? @map("supplementary_insurance")
+  diagnosis               String? @db.Text
+  allergies               String? @db.Text
+
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home      Home               @relation(fields: [homeId], references: [id], onDelete: Cascade)
   invoices  Invoice[]
   carePlans CarePlan[]
   notes     ResidentNote[]
+  contacts  ResidentContact[]
 
   @@index([tenantId])
   @@index([homeId])
   @@map("residents")
+}
+
+// One row per face-sheet contact "slot" (emergency contact, social worker,
+// primary care doctor, etc.) rather than ~45 flat columns on Resident for
+// 9 roles x 5 fields each — normalized the same way ResidentNote/CarePlan
+// already are. `role` is a fixed, known set (see ROLES in the face-sheet
+// route), not open-ended, but kept as free-text String to match this
+// schema's existing convention of plain strings + JS-validated arrays
+// instead of Prisma enums.
+model ResidentContact {
+  id         String   @id @default(uuid())
+  residentId String   @map("resident_id")
+  role       String
+  name       String?
+  phone      String?
+  fax        String?
+  email      String?
+  address    String?
+  specialty  String? // only meaningful for specialist_* roles ("Specialist/Type" on the form)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+
+  @@unique([residentId, role])
+  @@index([residentId])
+  @@map("resident_contacts")
 }
 
 // AI-drafted care plan for a resident, for a specific date. Generated from

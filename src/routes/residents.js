@@ -6,6 +6,22 @@ const express = require("express");
 const { prisma } = require("../middleware/tenant");
 const router = express.Router();
 
+// Fixed set of face-sheet contact "slots" — see ResidentContact in
+// schema.prisma. Kept as a plain array (not a Prisma enum) to match this
+// schema's existing convention.
+const CONTACT_ROLES = [
+  "emergency_contact_1",
+  "emergency_contact_2",
+  "social_worker",
+  "financial_worker",
+  "nurse_delegator",
+  "pharmacy",
+  "primary_care_doctor",
+  "specialist_1",
+  "specialist_2",
+  "specialist_3",
+];
+
 // GET /residents — list all residents for the current tenant
 router.get("/", async (req, res) => {
   const residents = await prisma.resident.findMany({
@@ -21,6 +37,7 @@ router.get("/:id", async (req, res) => {
     where: { id: req.params.id, tenantId: req.tenantId }, // findFirst, not findUnique —
     // findUnique by id alone would let a request from Tenant A fetch Tenant B's
     // resident just by guessing a UUID. findFirst with both conditions closes that gap.
+    include: { contacts: true, home: { select: { name: true, address: true, phone: true, fax: true } } },
   });
 
   if (!resident) {
@@ -157,6 +174,84 @@ router.patch("/:id/link-quickbooks", async (req, res) => {
     data: { qboCustomerId },
   });
   res.json(updated);
+});
+
+// PUT /residents/:id/face-sheet — one save for every field the printable
+// face sheet needs: the flat fields on Resident, plus every contact "slot"
+// (emergency contacts, providers) as ResidentContact rows. Upserts each
+// contact by (residentId, role) so saving after filling in just one new
+// contact doesn't require resending every other one.
+router.put("/:id/face-sheet", async (req, res) => {
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const {
+    middleName,
+    socialSecurityNumber,
+    dnrStatus,
+    advancedDirectivesType,
+    medicareNumber,
+    medicaidNumber,
+    supplementaryInsurance,
+    diagnosis,
+    allergies,
+    contacts,
+  } = req.body;
+
+  if (dnrStatus && !["yes", "no"].includes(dnrStatus)) {
+    return res.status(400).json({ error: 'dnrStatus must be "yes" or "no".' });
+  }
+
+  await prisma.resident.update({
+    where: { id: resident.id },
+    data: {
+      middleName: middleName || null,
+      socialSecurityNumber: socialSecurityNumber || null,
+      dnrStatus: dnrStatus || null,
+      advancedDirectivesType: advancedDirectivesType || null,
+      medicareNumber: medicareNumber || null,
+      medicaidNumber: medicaidNumber || null,
+      supplementaryInsurance: supplementaryInsurance || null,
+      diagnosis: diagnosis || null,
+      allergies: allergies || null,
+    },
+  });
+
+  if (contacts && typeof contacts === "object") {
+    for (const role of Object.keys(contacts)) {
+      if (!CONTACT_ROLES.includes(role)) continue; // ignore unknown roles rather than 400 — keeps the form free to add slots later
+      const c = contacts[role] || {};
+      await prisma.residentContact.upsert({
+        where: { residentId_role: { residentId: resident.id, role } },
+        create: {
+          residentId: resident.id,
+          role,
+          name: c.name || null,
+          phone: c.phone || null,
+          fax: c.fax || null,
+          email: c.email || null,
+          address: c.address || null,
+          specialty: c.specialty || null,
+        },
+        update: {
+          name: c.name || null,
+          phone: c.phone || null,
+          fax: c.fax || null,
+          email: c.email || null,
+          address: c.address || null,
+          specialty: c.specialty || null,
+        },
+      });
+    }
+  }
+
+  const withContacts = await prisma.resident.findUnique({
+    where: { id: resident.id },
+    include: { contacts: true, home: { select: { name: true, address: true, phone: true, fax: true } } },
+  });
+  res.json(withContacts);
 });
 
 module.exports = router;

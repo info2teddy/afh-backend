@@ -15,6 +15,8 @@ router.get("/", async (req, res) => {
       name: true,
       licenseNumber: true,
       address: true,
+      phone: true,
+      fax: true,
       capacity: true,
       _count: { select: { residents: true } },
     },
@@ -24,13 +26,21 @@ router.get("/", async (req, res) => {
 });
 
 router.post("/", requireAdmin, async (req, res) => {
-  const { name, licenseNumber, address, capacity } = req.body;
+  const { name, licenseNumber, address, phone, fax, capacity } = req.body;
   if (!name || !licenseNumber || !capacity) {
     return res.status(400).json({ error: "name, licenseNumber, and capacity are required." });
   }
 
   const home = await prisma.home.create({
-    data: { tenantId: req.tenantId, name, licenseNumber, address: address || null, capacity: Number(capacity) },
+    data: {
+      tenantId: req.tenantId,
+      name,
+      licenseNumber,
+      address: address || null,
+      phone: phone || null,
+      fax: fax || null,
+      capacity: Number(capacity),
+    },
   });
   res.status(201).json(home);
 });
@@ -39,13 +49,15 @@ router.patch("/:id", requireAdmin, async (req, res) => {
   const home = await prisma.home.findFirst({ where: { id: req.params.id, tenantId: req.tenantId } });
   if (!home) return res.status(404).json({ error: "Home not found." });
 
-  const { name, licenseNumber, address, capacity } = req.body;
+  const { name, licenseNumber, address, phone, fax, capacity } = req.body;
   const updated = await prisma.home.update({
     where: { id: home.id },
     data: {
       ...(name !== undefined && { name }),
       ...(licenseNumber !== undefined && { licenseNumber }),
       ...(address !== undefined && { address: address || null }),
+      ...(phone !== undefined && { phone: phone || null }),
+      ...(fax !== undefined && { fax: fax || null }),
       ...(capacity !== undefined && { capacity: Number(capacity) }),
     },
   });
