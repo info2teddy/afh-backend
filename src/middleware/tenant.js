@@ -6,7 +6,11 @@
 
 const jwt = require("jsonwebtoken");
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+// The SSN column is omitted from every query on this client — including nested
+// includes — so no route can leak it by returning a Resident row. The two places
+// that legitimately need it (the reveal endpoint and the startup migration in
+// lib/ssn.js) opt back in by naming the column in an explicit `select`.
+const prisma = new PrismaClient({ omit: { resident: { socialSecurityNumber: true } } });
 
 const JWT_SECRET = process.env.JWT_SECRET;
 

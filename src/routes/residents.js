@@ -4,6 +4,7 @@
 
 const express = require("express");
 const { prisma } = require("../middleware/tenant");
+const ssn = require("../lib/ssn");
 const router = express.Router();
 
 // Fixed set of face-sheet contact "slots" — see ResidentContact in
@@ -190,6 +191,7 @@ router.put("/:id/face-sheet", async (req, res) => {
   const {
     middleName,
     socialSecurityNumber,
+    clearSocialSecurityNumber,
     dnrStatus,
     advancedDirectivesType,
     medicareNumber,
@@ -204,11 +206,37 @@ router.put("/:id/face-sheet", async (req, res) => {
     return res.status(400).json({ error: 'dnrStatus must be "yes" or "no".' });
   }
 
+  // SSN: three cases, never a silent overwrite. The UI only ever holds the last
+  // four digits, so it can't send the number back — "not provided" must mean
+  // "leave what's stored alone", and clearing is an explicit flag.
+  //   non-empty value  -> validate, encrypt, store (plus last four)
+  //   clear flag       -> remove both
+  //   otherwise        -> untouched
+  const ssnData = {};
+  if (typeof socialSecurityNumber === "string" && socialSecurityNumber.trim() !== "") {
+    let canonical;
+    try {
+      canonical = ssn.normalizeSsn(socialSecurityNumber);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    // Fail closed: without a key we refuse to save the number at all rather
+    // than fall back to storing it in plaintext.
+    if (!ssn.keyConfigured()) {
+      return res.status(503).json({ error: "Saving Social Security numbers isn't set up on the server yet. Ask CareFit support." });
+    }
+    ssnData.socialSecurityNumber = ssn.encryptSsn(canonical, resident.id);
+    ssnData.socialSecurityLast4 = ssn.last4(canonical);
+  } else if (clearSocialSecurityNumber === true) {
+    ssnData.socialSecurityNumber = null;
+    ssnData.socialSecurityLast4 = null;
+  }
+
   await prisma.resident.update({
     where: { id: resident.id },
     data: {
       middleName: middleName || null,
-      socialSecurityNumber: socialSecurityNumber || null,
+      ...ssnData,
       dnrStatus: dnrStatus || null,
       advancedDirectivesType: advancedDirectivesType || null,
       medicareNumber: medicareNumber || null,
@@ -257,6 +285,31 @@ router.put("/:id/face-sheet", async (req, res) => {
     include: { contacts: true, home: { select: { name: true, address: true, phone: true, fax: true } } },
   });
   res.json(withContacts);
+});
+
+// GET /residents/:id/social-security-number — the ONE place the full number is
+// decrypted and returned, for the printed face sheet. Every other resident
+// response omits the column entirely (see the global `omit` in
+// middleware/tenant.js) and carries only socialSecurityLast4. Tenant-scoped like
+// everything else; a kiosk login can't reach it (middleware/kioskRestrict.js).
+// Each reveal is logged (who, which resident, when — never the value) so
+// access to it can be traced in Railway's logs.
+router.get("/:id/social-security-number", async (req, res) => {
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+    select: { id: true, socialSecurityNumber: true }, // explicit select overrides the client-wide omit
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  let value = null;
+  try {
+    value = ssn.decryptSsn(resident.socialSecurityNumber, resident.id);
+  } catch (err) {
+    console.error(`[ssn] could not decrypt resident ${resident.id}: ${err.message}`);
+    return res.status(500).json({ error: "This Social Security number can't be read. Re-enter it on the face sheet." });
+  }
+  if (value) console.info(`[ssn-reveal] user=${req.userId} tenant=${req.tenantId} resident=${resident.id}`);
+  res.json({ socialSecurityNumber: value });
 });
 
 module.exports = router;

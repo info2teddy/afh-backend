@@ -2,7 +2,8 @@
 // Mirrors schema.sql. Run `npx prisma migrate dev` to create the actual tables.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["omitApi"] // global `omit` in middleware/tenant.js keeps Resident.socialSecurityNumber out of every query by default
 }
 
 datasource db {
@@ -122,6 +123,10 @@ model Resident {
   // split from `name` at render time for the face sheet only.
   middleName             String?   @map("middle_name")
   socialSecurityNumber   String?   @map("social_security_number")
+  // socialSecurityNumber holds ciphertext ("enc:v1:...", AES-256-GCM — see src/lib/ssn.js),
+  // never the number itself, and is omitted from every query by default. The last four
+  // digits live in plaintext beside it so the UI can show "***-**-1234" without decrypting.
+  socialSecurityLast4    String?   @map("social_security_last4")
   dnrStatus              String?   @map("dnr_status") // "yes" | "no" | null (unanswered)
   advancedDirectivesType String?   @map("advanced_directives_type")
   medicareNumber         String?   @map("medicare_number")

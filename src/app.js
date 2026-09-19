@@ -9,7 +9,8 @@ const express = require("express");
 // tenant, not just that one request).
 require("express-async-errors");
 const cors = require("cors");
-const { resolveTenant } = require("./middleware/tenant");
+const { resolveTenant, prisma } = require("./middleware/tenant");
+const { migrateLegacySsns } = require("./lib/ssn");
 const { restrictKiosk } = require("./middleware/kioskRestrict");
 const kioskRouter = require("./routes/kiosk");
 const residentsRouter = require("./routes/residents");
@@ -113,5 +114,14 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`AFH backend listening on port ${PORT}`));
+
+// Encrypt any SSN saved before field-level encryption existed. Idempotent and
+// non-blocking: a failure here must never stop the server from serving.
+migrateLegacySsns(prisma)
+  .then(({ migrated, skipped, keyMissing }) => {
+    if (keyMissing) console.warn("[ssn] SSN_ENCRYPTION_KEY is not set — Social Security numbers cannot be saved until it is.");
+    else if (migrated || skipped) console.log(`[ssn] encrypted ${migrated} legacy value(s), skipped ${skipped} that weren't 9 digits.`);
+  })
+  .catch((err) => console.error("[ssn] legacy migration failed:", err.message));
 
 module.exports = app;
