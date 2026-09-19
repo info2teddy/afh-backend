@@ -120,18 +120,26 @@ model Resident {
   // search, invoices); `middleName` is the only name part not derivable
   // from it, so that's the only name field added here — First/Last are
   // split from `name` at render time for the face sheet only.
-  middleName              String? @map("middle_name")
-  socialSecurityNumber    String? @map("social_security_number")
-  dnrStatus               String? @map("dnr_status") // "yes" | "no" | null (unanswered)
-  advancedDirectivesType  String? @map("advanced_directives_type")
-  medicareNumber          String? @map("medicare_number")
-  medicaidNumber          String? @map("medicaid_number")
-  supplementaryInsurance  String? @map("supplementary_insurance")
-  diagnosis               String? @db.Text
-  allergies               String? @db.Text
+  middleName             String?   @map("middle_name")
+  socialSecurityNumber   String?   @map("social_security_number")
+  dnrStatus              String?   @map("dnr_status") // "yes" | "no" | null (unanswered)
+  advancedDirectivesType String?   @map("advanced_directives_type")
+  medicareNumber         String?   @map("medicare_number")
+  medicaidNumber         String?   @map("medicaid_number")
+  supplementaryInsurance String?   @map("supplementary_insurance")
+  diagnosis              String?   @db.Text
+  allergies              String?   @db.Text
+  // Stamped by PUT /residents/:id/face-sheet so the printed sheet can carry a
+  // "Last updated" line. Without it a reprinted sheet is indistinguishable
+  // from the stale copy already in the binder — staff can't tell which is
+  // current. Deliberately separate from a general Resident.updatedAt: it means
+  // "the face sheet was reviewed/changed", not "any column changed" (a
+  // discharge or a QBO id sync shouldn't claim the face sheet was updated).
+  // Null means never saved through the face sheet form.
+  faceSheetUpdatedAt     DateTime? @map("face_sheet_updated_at")
 
-  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home      Home               @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home      Home              @relation(fields: [homeId], references: [id], onDelete: Cascade)
   invoices  Invoice[]
   carePlans CarePlan[]
   notes     ResidentNote[]

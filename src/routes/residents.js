@@ -216,6 +216,11 @@ router.put("/:id/face-sheet", async (req, res) => {
       supplementaryInsurance: supplementaryInsurance || null,
       diagnosis: diagnosis || null,
       allergies: allergies || null,
+      // Stamped on every save so the printed sheet can show "Last updated" —
+      // see the field comment in schema.prisma. Set here rather than via
+      // @updatedAt so that unrelated writes (discharge, QBO id sync) don't
+      // falsely claim the face sheet was reviewed.
+      faceSheetUpdatedAt: new Date(),
     },
   });
 
