@@ -33,6 +33,21 @@ const publicIntakeRouter = require("./routes/publicIntake");
 
 const app = express();
 
+// Railway terminates TLS at an edge proxy and forwards to this container, so
+// the socket address Express sees is the proxy's, not the caller's. Without
+// this, req.ip is identical for every visitor — which silently turns the
+// per-IP rate limiters (routes/auth.js login, routes/publicIntake.js) into
+// ONE shared bucket: a handful of failed logins from anyone locks out every
+// real user. Verified against production before setting this (3 requests with
+// the same forged X-Forwarded-For returned remaining 4, 4, 3 — the header was
+// being ignored, and the counter was shared across callers per replica).
+//
+// Deliberately 1 (trust exactly one proxy hop), never `true`: with `true`,
+// Express takes the leftmost X-Forwarded-For entry, which the caller controls,
+// so anyone could spoof a fresh IP per request and bypass the limiter
+// entirely. With 1 it takes the entry Railway's own proxy appended.
+app.set("trust proxy", 1);
+
 // FRONTEND_ORIGIN must be an exact match (e.g. https://app.yourdomain.com) —
 // never use a wildcard "*" once the JWT-based auth is in play, since that
 // would let any site read responses containing another origin's session data.

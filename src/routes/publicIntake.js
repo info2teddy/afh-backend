@@ -11,10 +11,24 @@
 // self-submitted facility until an admin has actually reviewed it.
 
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const { prisma } = require("../middleware/tenant");
 const router = express.Router();
 
-router.post("/afh-intake", async (req, res) => {
+// This is an unauthenticated write — without a limit, anyone can script
+// unlimited rows into the facility book, and every one of them lands in the
+// admin's "Pending review" queue to be read by hand. A real AFH fills this
+// out once, so 5 an hour per IP is generous; same limiter shape as the login
+// one in routes/auth.js.
+const intakeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many submissions from this network. Try again in an hour, or email CareFit directly." },
+});
+
+router.post("/afh-intake", intakeLimiter, async (req, res) => {
   const {
     name,
     address,
