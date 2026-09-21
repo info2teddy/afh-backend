@@ -34,7 +34,14 @@ router.post("/login", loginLimiter, async (req, res) => {
     return res.status(400).json({ error: "Email and password are required." });
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  // Case-insensitive and whitespace-tolerant: phone keyboards capitalise the
+  // first letter and autofill often appends a space, and an exact match
+  // turned each of those into a wrong-password attempt that counted toward the
+  // 5-per-15-minutes lockout. The password itself is never altered.
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: String(email).trim(), mode: "insensitive" } },
+    orderBy: { createdAt: "asc" },
+  });
   // Same generic error whether the email doesn't exist or the password is
   // wrong — don't reveal which one, that's an account-enumeration leak.
   if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
@@ -184,12 +191,15 @@ router.post("/users", async (req, res) => {
     return res.status(400).json({ error: "tenantId, email, and password are required." });
   }
 
-  const existing = await prisma.user.findUnique({ where: { email } });
+  // Stored trimmed and lower-cased so it matches however it's typed at login
+  // (login is case-insensitive too, which also covers older mixed-case rows).
+  const cleanEmail = String(email).trim().toLowerCase();
+  const existing = await prisma.user.findFirst({ where: { email: { equals: cleanEmail, mode: "insensitive" } } });
   if (existing) return res.status(409).json({ error: "A user with this email already exists." });
 
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.user.create({
-    data: { tenantId, email, passwordHash, role: role || "manager" },
+    data: { tenantId, email: cleanEmail, passwordHash, role: role || "manager" },
   });
 
   res.status(201).json({ id: user.id, email: user.email, role: user.role });
