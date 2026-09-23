@@ -42,11 +42,17 @@ model User {
   tenantId     String   @map("tenant_id")
   email        String   @unique
   passwordHash String   @map("password_hash")
-  role         String   @default("manager") // admin (you, cross-tenant) | manager (client staff)
+  role         String   @default("manager") // admin (you, cross-tenant) | manager (client staff) | employee (a specific caregiver's own login, see employeeId) | kiosk
+  // Only set when role is "employee" — links this login to the roster/payroll
+  // Employee row it acts as, so routes can scope what it sees to that
+  // employee's assigned homes. @unique: one Employee has at most one login.
+  employeeId   String?  @unique @map("employee_id")
   createdAt    DateTime @default(now()) @map("created_at")
 
   tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employee                Employee?                @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   residentNotes           ResidentNote[]
+  adlEntries              AdlEntry[]
   assignedPlacements      Placement[]
   placementEvents         PlacementEvent[]
   placementIntroductions  PlacementIntroduction[]
@@ -174,12 +180,13 @@ model Resident {
   // Null means never saved through the face sheet form.
   faceSheetUpdatedAt     DateTime? @map("face_sheet_updated_at")
 
-  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home      Home              @relation(fields: [homeId], references: [id], onDelete: Cascade)
-  invoices  Invoice[]
-  carePlans CarePlan[]
-  notes     ResidentNote[]
-  contacts  ResidentContact[]
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home       Home              @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  invoices   Invoice[]
+  carePlans  CarePlan[]
+  notes      ResidentNote[]
+  contacts   ResidentContact[]
+  adlEntries AdlEntry[]
 
   @@index([tenantId])
   @@index([homeId])
@@ -260,6 +267,31 @@ model ResidentNote {
   @@map("resident_notes")
 }
 
+// One row per ADL task a caregiver actually logged as done — an append-only
+// record of care given, distinct from ResidentNote (freeform) and from the
+// Negotiated Care Plan (what's prescribed, not what happened). `domain` is
+// always one of ADL_DOMAINS (src/lib/adlDomains.js) — the SAME 9 domains the
+// care plan's ADL table uses, so the checklist a caregiver taps through can
+// never list something the actual care plan doesn't.
+model AdlEntry {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  residentId String   @map("resident_id")
+  domain     String
+  note       String?  @db.Text
+  loggedById String   @map("logged_by_id")
+  loggedAt   DateTime @default(now()) @map("logged_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+  loggedBy User     @relation(fields: [loggedById], references: [id])
+
+  @@index([tenantId])
+  @@index([residentId])
+  @@index([residentId, domain])
+  @@map("adl_entries")
+}
+
 model Employee {
   id             String    @id @default(uuid())
   tenantId       String    @map("tenant_id")
@@ -281,6 +313,7 @@ model Employee {
   credentials      Credential[]
   shifts           Shift[]
   payrollLineItems PayrollLineItem[]
+  user             User?
   additionalHomes  EmployeeHomeAssignment[]
   onboardingItems  EmployeeOnboardingItem[]
 

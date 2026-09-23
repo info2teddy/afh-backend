@@ -49,7 +49,10 @@ router.post("/login", loginLimiter, async (req, res) => {
   }
 
   const token = jwt.sign(
-    { userId: user.id, tenantId: user.tenantId, role: user.role },
+    // employeeId is only meaningful (and only ever set) for role "employee" —
+    // see middleware/tenant.js and middleware/employeeRestrict.js, which use
+    // it to scope this login to its own assigned homes.
+    { userId: user.id, tenantId: user.tenantId, role: user.role, employeeId: user.employeeId || undefined },
     JWT_SECRET,
     { expiresIn: user.role === "kiosk" ? KIOSK_TOKEN_EXPIRY : TOKEN_EXPIRY }
   );
@@ -59,10 +62,19 @@ router.post("/login", loginLimiter, async (req, res) => {
     select: { id: true, name: true },
   });
 
+  // For an employee login, the frontend needs to know its own name/home
+  // without a second round trip — e.g. to show "Clocked in as ___" and know
+  // which employeeId to clock in as. Nothing sensitive (pay rate, PIN hash,
+  // etc.) — same restraint as GET /kiosk/employees.
+  const employee = user.employeeId
+    ? await prisma.employee.findUnique({ where: { id: user.employeeId }, select: { id: true, name: true, homeId: true } })
+    : null;
+
   res.json({
     token,
-    user: { id: user.id, email: user.email, role: user.role, tenantId: user.tenantId },
+    user: { id: user.id, email: user.email, role: user.role, tenantId: user.tenantId, employeeId: user.employeeId },
     tenant,
+    employee,
   });
 });
 
@@ -173,7 +185,7 @@ router.get("/users", async (req, res) => {
   const tenantId = req.query.tenantId || caller.tenantId;
   const users = await prisma.user.findMany({
     where: { tenantId },
-    select: { id: true, email: true, role: true, createdAt: true },
+    select: { id: true, email: true, role: true, employeeId: true, createdAt: true },
     orderBy: { createdAt: "asc" },
   });
   res.json(users);
@@ -185,10 +197,28 @@ router.post("/users", async (req, res) => {
   const caller = verifyAdminCaller(req, res);
   if (!caller) return;
 
-  const { email, password, tenantId, role } = req.body;
+  const { email, password, tenantId, role, employeeId } = req.body;
 
   if (!tenantId || !email || !password) {
     return res.status(400).json({ error: "tenantId, email, and password are required." });
+  }
+
+  // An "employee" login is meaningless without a roster Employee to act as —
+  // that link is how every scoped route (residents, notes, ADL, clock-in)
+  // knows which homes this person can touch. Verified against THIS tenantId,
+  // not just any tenant, same reasoning as every cross-tenant check elsewhere.
+  if (role === "employee") {
+    if (!employeeId) {
+      return res.status(400).json({ error: "employeeId is required for an employee login." });
+    }
+    const employee = await prisma.employee.findFirst({ where: { id: employeeId, tenantId } });
+    if (!employee) {
+      return res.status(404).json({ error: "That staff member wasn't found for this business." });
+    }
+    const alreadyLinked = await prisma.user.findUnique({ where: { employeeId } });
+    if (alreadyLinked) {
+      return res.status(409).json({ error: "This staff member already has a login." });
+    }
   }
 
   // Stored trimmed and lower-cased so it matches however it's typed at login
@@ -199,10 +229,10 @@ router.post("/users", async (req, res) => {
 
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.user.create({
-    data: { tenantId, email: cleanEmail, passwordHash, role: role || "manager" },
+    data: { tenantId, email: cleanEmail, passwordHash, role: role || "manager", employeeId: role === "employee" ? employeeId : null },
   });
 
-  res.status(201).json({ id: user.id, email: user.email, role: user.role });
+  res.status(201).json({ id: user.id, email: user.email, role: user.role, employeeId: user.employeeId });
 });
 
 // DELETE /auth/users/:id

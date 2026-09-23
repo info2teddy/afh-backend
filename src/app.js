@@ -12,6 +12,7 @@ const cors = require("cors");
 const { resolveTenant, prisma } = require("./middleware/tenant");
 const { migrateLegacySsns } = require("./lib/ssn");
 const { restrictKiosk } = require("./middleware/kioskRestrict");
+const { restrictEmployee } = require("./middleware/employeeRestrict");
 const kioskRouter = require("./routes/kiosk");
 const residentsRouter = require("./routes/residents");
 const employeesRouter = require("./routes/employees");
@@ -85,6 +86,8 @@ app.use(resolveTenant);
 // middleware/kioskRestrict.js. Placed once, here, so every router below
 // benefits without each needing its own kiosk check.
 app.use(restrictKiosk);
+// Same idea, for a caregiver's own login — see middleware/employeeRestrict.js.
+app.use(restrictEmployee);
 
 app.use("/kiosk", kioskRouter);
 app.use("/quickbooks", quickbooksConnectRouter); // covers /quickbooks/connect

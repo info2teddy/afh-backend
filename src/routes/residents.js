@@ -5,7 +5,19 @@
 const express = require("express");
 const { prisma } = require("../middleware/tenant");
 const ssn = require("../lib/ssn");
+const { assignedHomeIds } = require("../lib/employeeScope");
+const { ADL_DOMAINS } = require("../lib/adlDomains");
 const router = express.Router();
+
+// An "employee" login (a caregiver's own, see middleware/employeeRestrict.js)
+// is scoped to their assigned homes, not the whole tenant — every other role
+// (admin/manager/kiosk) sees the full tenant, same as before. Returns null
+// for those roles so callers can tell "no restriction" apart from "restricted
+// to zero homes" (a brand-new employee login with no home assignment yet).
+async function employeeHomeFilter(req) {
+  if (req.userRole !== "employee") return null;
+  return assignedHomeIds(prisma, req.employeeId);
+}
 
 // Fixed set of face-sheet contact "slots" — see ResidentContact in
 // schema.prisma. Kept as a plain array (not a Prisma enum) to match this
@@ -23,21 +35,29 @@ const CONTACT_ROLES = [
   "specialist_3",
 ];
 
-// GET /residents — list all residents for the current tenant
+// GET /residents — list all residents for the current tenant (or, for an
+// employee login, only residents at homes they're assigned to)
 router.get("/", async (req, res) => {
+  const homeIds = await employeeHomeFilter(req);
   const residents = await prisma.resident.findMany({
-    where: { tenantId: req.tenantId }, // never omit this
+    where: { tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) }, // never omit tenantId
     orderBy: { name: "asc" },
   });
   res.json(residents);
 });
 
-// GET /residents/:id — a single resident, still scoped to tenant
+// GET /residents/:id — a single resident, still scoped to tenant (and, for
+// an employee login, to their assigned homes)
 router.get("/:id", async (req, res) => {
+  const homeIds = await employeeHomeFilter(req);
   const resident = await prisma.resident.findFirst({
-    where: { id: req.params.id, tenantId: req.tenantId }, // findFirst, not findUnique —
-    // findUnique by id alone would let a request from Tenant A fetch Tenant B's
-    // resident just by guessing a UUID. findFirst with both conditions closes that gap.
+    where: {
+      id: req.params.id,
+      tenantId: req.tenantId, // findFirst, not findUnique —
+      // findUnique by id alone would let a request from Tenant A fetch Tenant B's
+      // resident just by guessing a UUID. findFirst with both conditions closes that gap.
+      ...(homeIds && { homeId: { in: homeIds } }),
+    },
     include: { contacts: true, home: { select: { name: true, address: true, phone: true, fax: true } } },
   });
 
@@ -96,8 +116,9 @@ router.post("/", async (req, res) => {
 
 // GET /residents/:id/notes — freeform staff notes, newest first
 router.get("/:id/notes", async (req, res) => {
+  const homeIds = await employeeHomeFilter(req);
   const resident = await prisma.resident.findFirst({
-    where: { id: req.params.id, tenantId: req.tenantId },
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
   });
   if (!resident) return res.status(404).json({ error: "Resident not found." });
 
@@ -114,8 +135,9 @@ router.post("/:id/notes", async (req, res) => {
   const { content } = req.body;
   if (!content?.trim()) return res.status(400).json({ error: "content is required." });
 
+  const homeIds = await employeeHomeFilter(req);
   const resident = await prisma.resident.findFirst({
-    where: { id: req.params.id, tenantId: req.tenantId },
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
   });
   if (!resident) return res.status(404).json({ error: "Resident not found." });
 
@@ -124,6 +146,46 @@ router.post("/:id/notes", async (req, res) => {
     include: { author: { select: { email: true } } },
   });
   res.status(201).json(note);
+});
+
+// GET /residents/:id/adl — every ADL task logged for this resident, newest
+// first. See lib/adlDomains.js — `domain` is always one of ADL_DOMAINS.
+router.get("/:id/adl", async (req, res) => {
+  const homeIds = await employeeHomeFilter(req);
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const entries = await prisma.adlEntry.findMany({
+    where: { residentId: resident.id, tenantId: req.tenantId },
+    include: { loggedBy: { select: { email: true } } },
+    orderBy: { loggedAt: "desc" },
+  });
+  res.json(entries);
+});
+
+// POST /residents/:id/adl — log one ADL task as done, attributed to the
+// logged-in user. Append-only, like notes — logging a domain again (e.g.
+// toileting a second time that shift) just adds another row, it doesn't
+// overwrite the last one, since each occurrence is its own real event.
+router.post("/:id/adl", async (req, res) => {
+  const { domain, note } = req.body;
+  if (!ADL_DOMAINS.includes(domain)) {
+    return res.status(400).json({ error: `domain must be one of: ${ADL_DOMAINS.join(", ")}.` });
+  }
+
+  const homeIds = await employeeHomeFilter(req);
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const entry = await prisma.adlEntry.create({
+    data: { tenantId: req.tenantId, residentId: resident.id, domain, note: note?.trim() || null, loggedById: req.userId },
+    include: { loggedBy: { select: { email: true } } },
+  });
+  res.status(201).json(entry);
 });
 
 const RESIDENT_STATUSES = ["active", "discharging", "discharged"];

@@ -9,6 +9,8 @@
 const express = require("express");
 const multer = require("multer");
 const { prisma } = require("../middleware/tenant");
+const { assignedHomeIds } = require("../lib/employeeScope");
+const { ADL_DOMAINS } = require("../lib/adlDomains");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -98,7 +100,7 @@ Write the plan using exactly these section headers, each alone on its own line s
 Format ACTIVITIES OF DAILY LIVING and INSTRUMENTAL ACTIVITIES OF DAILY LIVING as a markdown table, matching the DSHS template's own layout, with exactly these three columns:
 | Domain | Strengths & Preferences | Assistance Required / Caregiver Will |
 |---|---|---|
-Under ACTIVITIES OF DAILY LIVING, one row per domain for: Ambulation/Mobility, Bed Mobility/Transfer, Eating, Toileting/Continence, Dressing, Personal Hygiene, Bathing, Foot Care, Skin Care.
+Under ACTIVITIES OF DAILY LIVING, one row per domain for: ${ADL_DOMAINS.join(", ")}.
 Under INSTRUMENTAL ACTIVITIES OF DAILY LIVING, one row per domain for: Managing Finances, Shopping, Transportation, Activities/Social. For Managing Finances, whenever the resident needs full assistance managing their finances, the Assistance Required / Caregiver Will cell must state that staff provide full assistance with financial management on the resident's behalf, AND that all transactions and financial records must be independently verified (double-checked) by a second staff member — a standard safeguard against errors or financial exploitation.
 
 Format RESIDENT SUMMARY as a flat list of "**Label:** value" lines (one per line, no bullets) — Name, Date of Birth/Age, Room, Move-in Date, Care Level, Payer, Allergies, Legal Documents, Specialty Needs.
@@ -113,10 +115,19 @@ For every other section, use short bullet points ("- ") or short paragraphs. ${
 Do not use checkboxes or brackets. Do not include a title, date, or preamble — start directly with the first "## " header.`;
 }
 
+// Read-only from an employee login's point of view — see
+// middleware/employeeRestrict.js, which never allows POST /care-plans/generate
+// through for that role. Still worth scoping the read too, in case a
+// caregiver at Home A ever guesses a residentId belonging to Home B.
 router.get("/", async (req, res) => {
   const { residentId } = req.query;
   if (!residentId) {
     return res.status(400).json({ error: "residentId is required." });
+  }
+  if (req.userRole === "employee") {
+    const homeIds = await assignedHomeIds(prisma, req.employeeId);
+    const resident = await prisma.resident.findFirst({ where: { id: residentId, tenantId: req.tenantId, homeId: { in: homeIds } } });
+    if (!resident) return res.status(404).json({ error: "Resident not found." });
   }
   const plans = await prisma.carePlan.findMany({
     where: { tenantId: req.tenantId, residentId },

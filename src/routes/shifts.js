@@ -70,24 +70,35 @@ router.get("/week-overview", async (req, res) => {
   res.json(overview);
 });
 
-// POST /shifts/clock-in — start a shift. Requires the employee's kiosk PIN,
-// since this is meant to be usable from a shared home tablet without a
-// manager entering their own login for every caregiver.
+// POST /shifts/clock-in — start a shift. Requires the employee's kiosk PIN —
+// meant to be usable from a shared home tablet without a manager entering
+// their own login for every caregiver — UNLESS the caller is an employee-role
+// login (see middleware/employeeRestrict.js): there, the JWT itself already
+// proves who's clocking in, on their own device, so no PIN is asked for. That
+// login can still only ever clock ITSELF in, never another employeeId.
 router.post("/clock-in", async (req, res) => {
-  const { employeeId, shiftType, pin } = req.body;
-  if (!employeeId || !shiftType || !pin) {
-    return res.status(400).json({ error: "employeeId, shiftType, and pin are required." });
+  const { shiftType, pin } = req.body;
+  const employeeId = req.userRole === "employee" ? req.employeeId : req.body.employeeId;
+  if (!employeeId || !shiftType) {
+    return res.status(400).json({ error: "employeeId and shiftType are required." });
+  }
+  if (req.userRole === "employee" && req.body.employeeId && req.body.employeeId !== req.employeeId) {
+    return res.status(403).json({ error: "This login can only clock itself in." });
   }
 
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, tenantId: req.tenantId },
   });
   if (!employee) return res.status(404).json({ error: "Employee not found." });
-  if (!employee.pinHash) {
-    return res.status(400).json({ error: "No PIN set for this employee yet — ask a manager to set one." });
-  }
-  if (!(await bcrypt.compare(pin, employee.pinHash))) {
-    return res.status(403).json({ error: "Incorrect PIN." });
+
+  if (req.userRole !== "employee") {
+    if (!pin) return res.status(400).json({ error: "pin is required." });
+    if (!employee.pinHash) {
+      return res.status(400).json({ error: "No PIN set for this employee yet — ask a manager to set one." });
+    }
+    if (!(await bcrypt.compare(pin, employee.pinHash))) {
+      return res.status(403).json({ error: "Incorrect PIN." });
+    }
   }
 
   const alreadyOpen = await prisma.shift.findFirst({
@@ -109,11 +120,13 @@ router.post("/clock-in", async (req, res) => {
   res.status(201).json(shift);
 });
 
-// POST /shifts/:id/clock-out — end a shift. Also PIN-gated, so one caregiver
-// can't clock another one out at a shared kiosk.
+// POST /shifts/:id/clock-out — end a shift. Also PIN-gated at a shared
+// kiosk, so one caregiver can't clock another one out — but an employee-role
+// login skips the PIN the same way clock-in does above, and can only ever
+// clock out its OWN open shift, never someone else's.
 router.post("/:id/clock-out", async (req, res) => {
   const { sleepTimeExcludedMinutes, sleepInterrupted, pin } = req.body;
-  if (!pin) return res.status(400).json({ error: "pin is required." });
+  if (req.userRole !== "employee" && !pin) return res.status(400).json({ error: "pin is required." });
 
   const shift = await prisma.shift.findFirst({
     where: { id: req.params.id, tenantId: req.tenantId },
@@ -121,7 +134,11 @@ router.post("/:id/clock-out", async (req, res) => {
   });
   if (!shift) return res.status(404).json({ error: "Shift not found." });
   if (shift.clockOut) return res.status(400).json({ error: "Shift already clocked out." });
-  if (!(await bcrypt.compare(pin, shift.employee.pinHash || ""))) {
+  if (req.userRole === "employee") {
+    if (shift.employeeId !== req.employeeId) {
+      return res.status(403).json({ error: "This login can only clock itself out." });
+    }
+  } else if (!(await bcrypt.compare(pin, shift.employee.pinHash || ""))) {
     return res.status(403).json({ error: "Incorrect PIN." });
   }
 

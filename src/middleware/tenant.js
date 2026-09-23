@@ -38,6 +38,11 @@ async function resolveTenant(req, res, next) {
   req.tenant = tenant;
   req.userId = payload.userId;
   req.userRole = payload.role;
+  // Only present on an employee-role token (see routes/auth.js login) — the
+  // roster Employee row this login acts as. Routes that reach an employee
+  // login use this with lib/employeeScope.js to filter to that person's
+  // assigned homes; every other role leaves this undefined.
+  req.employeeId = payload.employeeId || null;
   next();
 }
 
