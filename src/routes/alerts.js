@@ -13,6 +13,7 @@
 const express = require("express");
 const { prisma } = require("../middleware/tenant");
 const { evaluateWeeklyHours } = require("../lib/overtimeFlagging");
+const { computeFireDrillStatus } = require("../lib/fireDrills");
 const router = express.Router();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -46,6 +47,8 @@ router.get("/", async (req, res) => {
     overdueOnboarding,
     unapprovedShifts,
     activeEmployees,
+    homes,
+    latestFireDrillsByHome,
     thisWeeksShifts,
   ] = await Promise.all([
       prisma.credential.findMany({
@@ -74,6 +77,8 @@ router.get("/", async (req, res) => {
         where: { tenantId: req.tenantId, status: "active" },
         select: { id: true, name: true },
       }),
+      prisma.home.findMany({ where: { tenantId: req.tenantId }, select: { id: true, name: true } }),
+      prisma.fireDrill.groupBy({ by: ["homeId"], where: { tenantId: req.tenantId }, _max: { drilledAt: true } }),
       prisma.shift.findMany({
         where: { tenantId: req.tenantId, clockIn: { gte: weekStart, lt: weekEnd }, clockOut: { not: null } },
         select: {
@@ -88,6 +93,29 @@ router.get("/", async (req, res) => {
     ]);
 
   const alerts = [];
+
+  const lastDrilledAt = Object.fromEntries(latestFireDrillsByHome.map((r) => [r.homeId, r._max.drilledAt]));
+  const fireDrillStatus = computeFireDrillStatus(homes, lastDrilledAt, today);
+  const overdueDrillHomes = fireDrillStatus.filter((s) => s.status === "overdue");
+  const dueSoonDrillHomes = fireDrillStatus.filter((s) => s.status === "due_soon");
+  if (overdueDrillHomes.length > 0) {
+    alerts.push({
+      type: "fire_drill_overdue",
+      tone: "danger",
+      message: `${overdueDrillHomes.length} home${overdueDrillHomes.length === 1 ? "" : "s"} overdue for a fire drill (60-day cadence)`,
+      link: "/fire-drills",
+      count: overdueDrillHomes.length,
+    });
+  }
+  if (dueSoonDrillHomes.length > 0) {
+    alerts.push({
+      type: "fire_drill_overdue",
+      tone: "warning",
+      message: `${dueSoonDrillHomes.length} home${dueSoonDrillHomes.length === 1 ? "" : "s"} due for a fire drill within 14 days`,
+      link: "/fire-drills",
+      count: dueSoonDrillHomes.length,
+    });
+  }
 
   const criticalCredentials = expiringCredentials.filter((c) => new Date(c.expirationDate) <= addDays(today, 30));
   const upcomingCredentials = expiringCredentials.filter((c) => new Date(c.expirationDate) > addDays(today, 30));

@@ -5,6 +5,7 @@
 
 const express = require("express");
 const { prisma, requireAdmin } = require("../middleware/tenant");
+const { computeFireDrillStatus } = require("../lib/fireDrills");
 const router = express.Router();
 
 router.get("/", async (req, res) => {
@@ -91,6 +92,101 @@ router.delete("/:id", requireAdmin, async (req, res) => {
     prisma.placementFacility.deleteMany({ where: { homeId: home.id } }),
     prisma.home.delete({ where: { id: home.id } }),
   ]);
+  res.status(204).end();
+});
+
+// --- Fire drills -----------------------------------------------------------
+// A log, not a schedule: each row is a drill that actually happened. Open to
+// any logged-in tenant user (not requireAdmin, unlike Facilities/Payroll/rate
+// schedules above) — running and recording a drill is routine safety work a
+// manager or caregiver does day to day, not the technical/financial setup
+// this app reserves for admins.
+const SHIFTS = ["day", "evening", "night"];
+
+// GET /homes/fire-drill-status — one row per home in the tenant, each home's
+// most recent drill and the derived compliance status. A single aggregate
+// call (same shape as GET /employees/credentials/expiring) instead of the
+// frontend fetching each home's full log just to compute a status.
+router.get("/fire-drill-status", async (req, res) => {
+  const homes = await prisma.home.findMany({
+    where: { tenantId: req.tenantId },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+
+  const latestByHome = await prisma.fireDrill.groupBy({
+    by: ["homeId"],
+    where: { tenantId: req.tenantId },
+    _max: { drilledAt: true },
+  });
+  const lastDrilledAt = Object.fromEntries(latestByHome.map((r) => [r.homeId, r._max.drilledAt]));
+  res.json(computeFireDrillStatus(homes, lastDrilledAt));
+});
+
+router.get("/:homeId/fire-drills", async (req, res) => {
+  const home = await prisma.home.findFirst({ where: { id: req.params.homeId, tenantId: req.tenantId } });
+  if (!home) return res.status(404).json({ error: "Home not found." });
+
+  const drills = await prisma.fireDrill.findMany({
+    where: { homeId: home.id },
+    orderBy: { drilledAt: "desc" },
+  });
+  res.json(drills);
+});
+
+router.post("/:homeId/fire-drills", async (req, res) => {
+  const home = await prisma.home.findFirst({ where: { id: req.params.homeId, tenantId: req.tenantId } });
+  if (!home) return res.status(404).json({ error: "Home not found." });
+
+  const {
+    drilledAt,
+    shift,
+    conductedByName,
+    staffPresent,
+    residentsParticipated,
+    residentsExempted,
+    exemptionReason,
+    evacuationSeconds,
+    issuesNoted,
+    correctiveAction,
+  } = req.body;
+
+  if (!drilledAt || !conductedByName?.trim()) {
+    return res.status(400).json({ error: "drilledAt and conductedByName are required." });
+  }
+  if (shift && !SHIFTS.includes(shift)) {
+    return res.status(400).json({ error: `shift must be one of: ${SHIFTS.join(", ")}.` });
+  }
+
+  const drill = await prisma.fireDrill.create({
+    data: {
+      tenantId: req.tenantId,
+      homeId: home.id,
+      drilledAt: new Date(drilledAt),
+      shift: shift || null,
+      conductedByName: conductedByName.trim(),
+      staffPresent: staffPresent || null,
+      residentsParticipated: residentsParticipated === "" || residentsParticipated == null ? null : Number(residentsParticipated),
+      residentsExempted: residentsExempted === "" || residentsExempted == null ? null : Number(residentsExempted),
+      exemptionReason: exemptionReason || null,
+      evacuationSeconds: evacuationSeconds === "" || evacuationSeconds == null ? null : Number(evacuationSeconds),
+      issuesNoted: issuesNoted || null,
+      correctiveAction: correctiveAction || null,
+    },
+  });
+  res.status(201).json(drill);
+});
+
+// DELETE — for correcting a mis-entered log row. Unlike rate schedules there's
+// no downstream record that depends on a specific drill row, so this is
+// unconditional once tenant/home ownership is confirmed.
+router.delete("/:homeId/fire-drills/:id", async (req, res) => {
+  const drill = await prisma.fireDrill.findFirst({
+    where: { id: req.params.id, homeId: req.params.homeId, tenantId: req.tenantId },
+  });
+  if (!drill) return res.status(404).json({ error: "Fire drill record not found." });
+
+  await prisma.fireDrill.delete({ where: { id: drill.id } });
   res.status(204).end();
 });
 

@@ -76,9 +76,40 @@ model Home {
   assignments EmployeeHomeAssignment[] // additional homes this branch's staff float to
   shifts      Shift[]
   expenses    Expense[]
+  fireDrills  FireDrill[]
 
   @@index([tenantId])
   @@map("homes")
+}
+
+// One row per fire drill actually conducted at a home — not a schedule, a log.
+// "Compliant" is never stored as a field: it's derived (see GET
+// /homes/fire-drill-status in routes/homes.js) from the most recent row's
+// drilledAt + 60 days, the same way Credentials derives status from
+// expirationDate. A home with zero rows is overdue from day one, which is
+// correct — it means no drill has ever been logged.
+model FireDrill {
+  id                    String   @id @default(uuid())
+  tenantId              String   @map("tenant_id")
+  homeId                String   @map("home_id")
+  drilledAt             DateTime @map("drilled_at")
+  shift                 String? // "day" | "evening" | "night" — see SHIFTS in routes/homes.js. Nullable: older/imported rows may not have it.
+  conductedByName       String   @map("conducted_by_name")
+  staffPresent          String?  @map("staff_present") @db.Text // free-text names, one row per drill rather than a join table
+  residentsParticipated Int?     @map("residents_participated")
+  residentsExempted     Int?     @map("residents_exempted") // e.g. bedbound residents a physical evacuation drill can't include
+  exemptionReason       String?  @map("exemption_reason") @db.Text
+  evacuationSeconds     Int?     @map("evacuation_seconds") // time to fully evacuate, if timed
+  issuesNoted           String?  @map("issues_noted") @db.Text
+  correctiveAction      String?  @map("corrective_action") @db.Text
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  home Home @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([homeId])
+  @@index([drilledAt])
+  @@map("fire_drills")
 }
 
 model RateSchedule {
