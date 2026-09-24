@@ -20,6 +20,8 @@ const ALLOWED_EMPLOYEE_ROUTES = [
   { method: "POST", pattern: /^\/residents\/[^/]+\/notes$/ },
   { method: "GET", pattern: /^\/residents\/[^/]+\/adl$/ },
   { method: "POST", pattern: /^\/residents\/[^/]+\/adl$/ },
+  { method: "GET", pattern: /^\/residents\/[^/]+\/vitals$/ },
+  { method: "POST", pattern: /^\/residents\/[^/]+\/vitals$/ },
   { method: "GET", pattern: /^\/care-plans$/ }, // read-only — POST /care-plans/generate is deliberately absent
   // GET /shifts/open is tenant-wide, not home-scoped, same as the kiosk role
   // already gets (see kioskRestrict.js) — it's just who's currently clocked

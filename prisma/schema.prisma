@@ -53,6 +53,7 @@ model User {
   employee                Employee?                @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   residentNotes           ResidentNote[]
   adlEntries              AdlEntry[]
+  vitalsEntries           VitalsEntry[]
   assignedPlacements      Placement[]
   placementEvents         PlacementEvent[]
   placementIntroductions  PlacementIntroduction[]
@@ -180,13 +181,14 @@ model Resident {
   // Null means never saved through the face sheet form.
   faceSheetUpdatedAt     DateTime? @map("face_sheet_updated_at")
 
-  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home       Home              @relation(fields: [homeId], references: [id], onDelete: Cascade)
-  invoices   Invoice[]
-  carePlans  CarePlan[]
-  notes      ResidentNote[]
-  contacts   ResidentContact[]
-  adlEntries AdlEntry[]
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home          Home              @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  invoices      Invoice[]
+  carePlans     CarePlan[]
+  notes         ResidentNote[]
+  contacts      ResidentContact[]
+  adlEntries    AdlEntry[]
+  vitalsEntries VitalsEntry[]
 
   @@index([tenantId])
   @@index([homeId])
@@ -267,17 +269,22 @@ model ResidentNote {
   @@map("resident_notes")
 }
 
-// One row per ADL task a caregiver actually logged as done — an append-only
-// record of care given, distinct from ResidentNote (freeform) and from the
-// Negotiated Care Plan (what's prescribed, not what happened). `domain` is
-// always one of ADL_DOMAINS (src/lib/adlDomains.js) — the SAME 9 domains the
-// care plan's ADL table uses, so the checklist a caregiver taps through can
-// never list something the actual care plan doesn't.
+// One row per personal-care task a caregiver actually logged as done — an
+// append-only daily chart, distinct from ResidentNote (freeform) and from
+// the Negotiated Care Plan (what's prescribed, not what happened each
+// shift). Modeled on the real paper "Personal Care Record" the user's AFHs
+// use: `domain` is one of PERSONAL_CARE_TASKS (src/lib/personalCareTasks.js
+// — Bath, Oral Care, Bowel Movement, Ambulation, etc.), `shift` is which of
+// the three shifts the paper form charts (day/evening/night). Originally
+// named for a smaller, care-plan-derived ADL list before the user shared
+// their real form — kept the table/model name to avoid a data migration for
+// what's really just a broader category list plus a shift column.
 model AdlEntry {
   id         String   @id @default(uuid())
   tenantId   String   @map("tenant_id")
   residentId String   @map("resident_id")
   domain     String
+  shift      String? // "day" | "evening" | "night" — nullable: rows logged before this column existed have none
   note       String?  @db.Text
   loggedById String   @map("logged_by_id")
   loggedAt   DateTime @default(now()) @map("logged_at")
@@ -290,6 +297,38 @@ model AdlEntry {
   @@index([residentId])
   @@index([residentId, domain])
   @@map("adl_entries")
+}
+
+// The paper form's second page — vitals/measurements, charted much more
+// sparsely than the task grid (the real example only had a couple of entries
+// across a whole month), so every field here is optional except who/when.
+// bloodPressure is a plain string ("146/87"), matching how it's actually
+// handwritten, rather than splitting it into two numbers.
+model VitalsEntry {
+  id               String   @id @default(uuid())
+  tenantId         String   @map("tenant_id")
+  residentId       String   @map("resident_id")
+  shift            String?
+  temperature      Decimal? @db.Decimal(4, 1)
+  temperatureRoute String?  @map("temperature_route") // "oral" | "rectal" | "other"
+  pulse            Int?
+  respirations     Int?
+  bloodPressure    String?  @map("blood_pressure")
+  weight           Decimal? @db.Decimal(6, 1)
+  intake           String?  @db.Text
+  output           String?  @db.Text
+  rom              String?  @db.Text
+  notes            String?  @db.Text
+  loggedById       String   @map("logged_by_id")
+  loggedAt         DateTime @default(now()) @map("logged_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  resident Resident @relation(fields: [residentId], references: [id], onDelete: Cascade)
+  loggedBy User     @relation(fields: [loggedById], references: [id])
+
+  @@index([tenantId])
+  @@index([residentId])
+  @@map("vitals_entries")
 }
 
 model Employee {

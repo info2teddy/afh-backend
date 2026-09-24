@@ -7,6 +7,7 @@ const { prisma } = require("../middleware/tenant");
 const ssn = require("../lib/ssn");
 const { assignedHomeIds } = require("../lib/employeeScope");
 const { ADL_DOMAINS } = require("../lib/adlDomains");
+const { PERSONAL_CARE_TASKS, SHIFTS } = require("../lib/personalCareTasks");
 const router = express.Router();
 
 // An "employee" login (a caregiver's own, see middleware/employeeRestrict.js)
@@ -148,8 +149,9 @@ router.post("/:id/notes", async (req, res) => {
   res.status(201).json(note);
 });
 
-// GET /residents/:id/adl — every ADL task logged for this resident, newest
-// first. See lib/adlDomains.js — `domain` is always one of ADL_DOMAINS.
+// GET /residents/:id/adl — every personal-care task logged for this
+// resident, newest first. See lib/personalCareTasks.js — `domain` is always
+// one of PERSONAL_CARE_TASKS, `shift` one of SHIFTS.
 router.get("/:id/adl", async (req, res) => {
   const homeIds = await employeeHomeFilter(req);
   const resident = await prisma.resident.findFirst({
@@ -165,14 +167,18 @@ router.get("/:id/adl", async (req, res) => {
   res.json(entries);
 });
 
-// POST /residents/:id/adl — log one ADL task as done, attributed to the
-// logged-in user. Append-only, like notes — logging a domain again (e.g.
-// toileting a second time that shift) just adds another row, it doesn't
-// overwrite the last one, since each occurrence is its own real event.
+// POST /residents/:id/adl — log one personal-care task as done, attributed
+// to the logged-in user. Append-only, like notes — logging a domain again
+// (e.g. incontinence care a second time that shift) just adds another row,
+// it doesn't overwrite the last one, since each occurrence is its own real
+// event — matches how the paper Personal Care Record charts every occurrence.
 router.post("/:id/adl", async (req, res) => {
-  const { domain, note } = req.body;
-  if (!ADL_DOMAINS.includes(domain)) {
-    return res.status(400).json({ error: `domain must be one of: ${ADL_DOMAINS.join(", ")}.` });
+  const { domain, shift, note } = req.body;
+  if (!PERSONAL_CARE_TASKS.includes(domain)) {
+    return res.status(400).json({ error: `domain must be one of: ${PERSONAL_CARE_TASKS.join(", ")}.` });
+  }
+  if (shift && !SHIFTS.includes(shift)) {
+    return res.status(400).json({ error: `shift must be one of: ${SHIFTS.join(", ")}.` });
   }
 
   const homeIds = await employeeHomeFilter(req);
@@ -182,7 +188,66 @@ router.post("/:id/adl", async (req, res) => {
   if (!resident) return res.status(404).json({ error: "Resident not found." });
 
   const entry = await prisma.adlEntry.create({
-    data: { tenantId: req.tenantId, residentId: resident.id, domain, note: note?.trim() || null, loggedById: req.userId },
+    data: { tenantId: req.tenantId, residentId: resident.id, domain, shift: shift || null, note: note?.trim() || null, loggedById: req.userId },
+    include: { loggedBy: { select: { email: true } } },
+  });
+  res.status(201).json(entry);
+});
+
+// GET /residents/:id/vitals — every vitals entry, newest first. Every field
+// but who/when is optional, matching how sparsely the real paper form's
+// vitals page is actually filled in.
+router.get("/:id/vitals", async (req, res) => {
+  const homeIds = await employeeHomeFilter(req);
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const entries = await prisma.vitalsEntry.findMany({
+    where: { residentId: resident.id, tenantId: req.tenantId },
+    include: { loggedBy: { select: { email: true } } },
+    orderBy: { loggedAt: "desc" },
+  });
+  res.json(entries);
+});
+
+// POST /residents/:id/vitals — log a vitals reading. Requires at least one
+// actual measurement — an entry with nothing but a shift/note isn't a
+// vitals reading, it belongs in Notes instead.
+const VITALS_FIELDS = ["temperature", "pulse", "respirations", "bloodPressure", "weight", "intake", "output", "rom"];
+router.post("/:id/vitals", async (req, res) => {
+  const { shift, temperature, temperatureRoute, pulse, respirations, bloodPressure, weight, intake, output, rom, notes } = req.body;
+  if (shift && !SHIFTS.includes(shift)) {
+    return res.status(400).json({ error: `shift must be one of: ${SHIFTS.join(", ")}.` });
+  }
+  if (!VITALS_FIELDS.some((f) => req.body[f] !== undefined && req.body[f] !== "")) {
+    return res.status(400).json({ error: "Enter at least one measurement." });
+  }
+
+  const homeIds = await employeeHomeFilter(req);
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const entry = await prisma.vitalsEntry.create({
+    data: {
+      tenantId: req.tenantId,
+      residentId: resident.id,
+      shift: shift || null,
+      temperature: temperature === "" || temperature == null ? null : Number(temperature),
+      temperatureRoute: temperatureRoute || null,
+      pulse: pulse === "" || pulse == null ? null : Number(pulse),
+      respirations: respirations === "" || respirations == null ? null : Number(respirations),
+      bloodPressure: bloodPressure || null,
+      weight: weight === "" || weight == null ? null : Number(weight),
+      intake: intake || null,
+      output: output || null,
+      rom: rom || null,
+      notes: notes || null,
+      loggedById: req.userId,
+    },
     include: { loggedBy: { select: { email: true } } },
   });
   res.status(201).json(entry);
