@@ -194,6 +194,36 @@ router.post("/:id/adl", async (req, res) => {
   res.status(201).json(entry);
 });
 
+// DELETE /residents/:id/adl/:entryId — undo a mis-tap. An admin/manager can
+// remove any entry (same trust level they already have everywhere else), but
+// an employee login can only remove its OWN entry, and only from today — a
+// caregiver fixing a fat-fingered double-tap a minute ago is very different
+// from anyone being able to quietly edit last week's chart after the fact,
+// which is a real record once the shift has passed.
+router.delete("/:id/adl/:entryId", async (req, res) => {
+  const homeIds = await employeeHomeFilter(req);
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const entry = await prisma.adlEntry.findFirst({
+    where: { id: req.params.entryId, residentId: resident.id, tenantId: req.tenantId },
+  });
+  if (!entry) return res.status(404).json({ error: "Entry not found." });
+
+  if (req.userRole === "employee") {
+    const isOwn = entry.loggedById === req.userId;
+    const isToday = new Date(entry.loggedAt).toDateString() === new Date().toDateString();
+    if (!isOwn || !isToday) {
+      return res.status(403).json({ error: "You can only remove your own entries from today. Ask a manager to correct older records." });
+    }
+  }
+
+  await prisma.adlEntry.delete({ where: { id: entry.id } });
+  res.status(204).end();
+});
+
 // GET /residents/:id/vitals — every vitals entry, newest first. Every field
 // but who/when is optional, matching how sparsely the real paper form's
 // vitals page is actually filled in.

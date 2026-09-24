@@ -20,6 +20,7 @@ const ALLOWED_EMPLOYEE_ROUTES = [
   { method: "POST", pattern: /^\/residents\/[^/]+\/notes$/ },
   { method: "GET", pattern: /^\/residents\/[^/]+\/adl$/ },
   { method: "POST", pattern: /^\/residents\/[^/]+\/adl$/ },
+  { method: "DELETE", pattern: /^\/residents\/[^/]+\/adl\/[^/]+$/ },
   { method: "GET", pattern: /^\/residents\/[^/]+\/vitals$/ },
   { method: "POST", pattern: /^\/residents\/[^/]+\/vitals$/ },
   { method: "GET", pattern: /^\/care-plans$/ }, // read-only — POST /care-plans/generate is deliberately absent
