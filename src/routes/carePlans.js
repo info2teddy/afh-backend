@@ -8,7 +8,7 @@
 
 const express = require("express");
 const multer = require("multer");
-const { prisma } = require("../middleware/tenant");
+const { prisma, requireAdmin } = require("../middleware/tenant");
 const { assignedHomeIds } = require("../lib/employeeScope");
 const { logAccess } = require("../lib/accessLog");
 const { ADL_DOMAINS } = require("../lib/adlDomains");
@@ -167,7 +167,38 @@ router.get("/:id/document", async (req, res) => {
   res.send(plan.sourceDocumentData);
 });
 
-router.post("/generate", upload.single("document"), async (req, res) => {
+// GET /care-plans/drafting — whether this business may send resident data to
+// Anthropic for drafting (see Tenant.carePlanDraftingEnabled).
+router.get("/drafting", (req, res) => {
+  res.json({ enabled: req.tenant.carePlanDraftingEnabled });
+});
+
+// PUT /care-plans/drafting — admin only; turned on once a BAA is in place.
+router.put("/drafting", requireAdmin, async (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled must be true or false." });
+  }
+  const tenant = await prisma.tenant.update({
+    where: { id: req.tenantId },
+    data: { carePlanDraftingEnabled: enabled },
+    select: { carePlanDraftingEnabled: true },
+  });
+  console.info(`[care-plan-drafting] user=${req.userId} tenant=${req.tenantId} enabled=${enabled}`);
+  res.json({ enabled: tenant.carePlanDraftingEnabled });
+});
+
+// Runs before the upload is even accepted: no BAA, no drafting.
+function requireDraftingEnabled(req, res, next) {
+  if (!req.tenant.carePlanDraftingEnabled) {
+    return res.status(403).json({
+      error: "Care plan drafting isn't turned on for this business yet. Ask CareFit support.",
+    });
+  }
+  next();
+}
+
+router.post("/generate", requireDraftingEnabled, upload.single("document"), async (req, res) => {
   if (!ANTHROPIC_API_KEY) {
     return res.status(503).json({
       error: "AI provider not configured — set ANTHROPIC_API_KEY on the backend to enable care plan generation.",

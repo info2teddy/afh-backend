@@ -26,6 +26,11 @@ model Tenant {
   // line type (private_pay_portion, medicaid_portion) posts under, so revenue
   // splits by payer in QuickBooks reports instead of all landing on one item.
   qboRevenueItemMap      Json?    @map("qbo_revenue_item_map")
+  // Care plan drafting sends resident details (name, DOB, prior plan, uploaded
+  // documents) to Anthropic. Off until a BAA covers that business's data —
+  // only an admin can turn it on (PUT /care-plans/drafting). Defaults off so a
+  // newly onboarded business never sends anything by accident.
+  carePlanDraftingEnabled Boolean @default(false) @map("care_plan_drafting_enabled")
   createdAt              DateTime @default(now()) @map("created_at")
 
   homes              Home[]
