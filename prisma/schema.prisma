@@ -28,11 +28,12 @@ model Tenant {
   qboRevenueItemMap      Json?    @map("qbo_revenue_item_map")
   createdAt              DateTime @default(now()) @map("created_at")
 
-  homes     Home[]
-  residents Resident[]
-  employees Employee[]
-  users     User[]
-  expenses  Expense[]
+  homes              Home[]
+  residents          Resident[]
+  employees          Employee[]
+  users              User[]
+  expenses           Expense[]
+  residentAccessLogs ResidentAccessLog[]
 
   @@map("tenants")
 }
@@ -843,4 +844,25 @@ model PlacementCommunication {
 
   @@index([placementId])
   @@map("placement_communications")
+}
+
+// Who opened or changed a resident's record, and when — the HIPAA access
+// trail. Append-only: nothing in the app updates or deletes these rows.
+// Deliberately no relation to Resident or User, so the trail outlives a
+// deleted resident or login; userEmail is a snapshot for the same reason.
+// Written through lib/accessLog.js, never directly.
+model ResidentAccessLog {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  residentId String   @map("resident_id")
+  userId     String?  @map("user_id")
+  userEmail  String?  @map("user_email")
+  userRole   String?  @map("user_role")
+  action     String // view | ssn_reveal | face_sheet_update | status_change | care_plan_generate | care_plan_document_view
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, residentId, createdAt])
+  @@map("resident_access_logs")
 }

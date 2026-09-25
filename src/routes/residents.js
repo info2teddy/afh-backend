@@ -6,6 +6,7 @@ const express = require("express");
 const { prisma } = require("../middleware/tenant");
 const ssn = require("../lib/ssn");
 const { assignedHomeIds } = require("../lib/employeeScope");
+const { logAccess } = require("../lib/accessLog");
 const { ADL_DOMAINS } = require("../lib/adlDomains");
 const { PERSONAL_CARE_TASKS, SHIFTS } = require("../lib/personalCareTasks");
 const router = express.Router();
@@ -109,6 +110,7 @@ router.get("/:id", async (req, res) => {
   if (!resident) {
     return res.status(404).json({ error: "Resident not found." });
   }
+  logAccess(req, resident.id, "view");
   res.json(req.userRole === "employee" ? forRole(req, resident) : decryptInsuranceIds(resident));
 });
 
@@ -357,6 +359,7 @@ router.patch("/:id/status", async (req, res) => {
       dischargeReason: status === "active" ? null : dischargeReason ?? resident.dischargeReason,
     },
   });
+  logAccess(req, resident.id, "status_change");
   res.json(updated);
 });
 
@@ -497,6 +500,7 @@ router.put("/:id/face-sheet", async (req, res) => {
     include: { contacts: true, home: { select: { name: true, address: true, phone: true, fax: true } } },
     omit: WITH_INSURANCE_IDS,
   });
+  logAccess(req, resident.id, "face_sheet_update");
   res.json(decryptInsuranceIds(withContacts));
 });
 
@@ -521,8 +525,31 @@ router.get("/:id/social-security-number", async (req, res) => {
     console.error(`[ssn] could not decrypt resident ${resident.id}: ${err.message}`);
     return res.status(500).json({ error: "This Social Security number can't be read. Re-enter it on the face sheet." });
   }
-  if (value) console.info(`[ssn-reveal] user=${req.userId} tenant=${req.tenantId} resident=${resident.id}`);
+  if (value) {
+    console.info(`[ssn-reveal] user=${req.userId} tenant=${req.tenantId} resident=${resident.id}`);
+    logAccess(req, resident.id, "ssn_reveal");
+  }
   res.json({ socialSecurityNumber: value });
+});
+
+// GET /residents/:id/access-log — who opened or changed this resident's
+// record (lib/accessLog.js), newest first. Managers and admins only: a
+// caregiver or kiosk login can't reach this path (employeeRestrict.js /
+// kioskRestrict.js allowlists).
+router.get("/:id/access-log", async (req, res) => {
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId },
+    select: { id: true },
+  });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+
+  const entries = await prisma.residentAccessLog.findMany({
+    where: { tenantId: req.tenantId, residentId: resident.id },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    select: { id: true, action: true, userEmail: true, userRole: true, createdAt: true },
+  });
+  res.json(entries);
 });
 
 module.exports = router;

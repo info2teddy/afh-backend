@@ -10,6 +10,7 @@ const express = require("express");
 const multer = require("multer");
 const { prisma } = require("../middleware/tenant");
 const { assignedHomeIds } = require("../lib/employeeScope");
+const { logAccess } = require("../lib/accessLog");
 const { ADL_DOMAINS } = require("../lib/adlDomains");
 const router = express.Router();
 
@@ -155,11 +156,12 @@ router.get("/", async (req, res) => {
 router.get("/:id/document", async (req, res) => {
   const plan = await prisma.carePlan.findFirst({
     where: { id: req.params.id, tenantId: req.tenantId },
-    select: { sourceDocumentName: true, sourceDocumentMimeType: true, sourceDocumentData: true },
+    select: { residentId: true, sourceDocumentName: true, sourceDocumentMimeType: true, sourceDocumentData: true },
   });
   if (!plan || !plan.sourceDocumentData) {
     return res.status(404).json({ error: "No document found for this care plan." });
   }
+  logAccess(req, plan.residentId, "care_plan_document_view");
   res.set("Content-Type", plan.sourceDocumentMimeType || "application/octet-stream");
   res.set("Content-Disposition", `inline; filename="${plan.sourceDocumentName || "document"}"`);
   res.send(plan.sourceDocumentData);
@@ -254,6 +256,7 @@ router.post("/generate", upload.single("document"), async (req, res) => {
     },
   });
 
+  logAccess(req, residentId, "care_plan_generate");
   res.status(201).json(plan);
 });
 
