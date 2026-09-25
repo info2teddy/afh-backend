@@ -10,7 +10,7 @@ const express = require("express");
 require("express-async-errors");
 const cors = require("cors");
 const { resolveTenant, prisma } = require("./middleware/tenant");
-const { migrateLegacySsns } = require("./lib/ssn");
+const { migrateLegacySsns, migrateLegacyInsuranceIds } = require("./lib/ssn");
 const { restrictKiosk } = require("./middleware/kioskRestrict");
 const { restrictEmployee } = require("./middleware/employeeRestrict");
 const kioskRouter = require("./routes/kiosk");
@@ -126,5 +126,12 @@ migrateLegacySsns(prisma)
     else if (migrated || skipped) console.log(`[ssn] encrypted ${migrated} legacy value(s), skipped ${skipped} that weren't 9 digits.`);
   })
   .catch((err) => console.error("[ssn] legacy migration failed:", err.message));
+
+// Same for Medicare/Medicaid numbers, which were plaintext until 2026-09-25.
+migrateLegacyInsuranceIds(prisma)
+  .then(({ migrated }) => {
+    if (migrated) console.log(`[ssn] encrypted ${migrated} legacy Medicare/Medicaid value(s).`);
+  })
+  .catch((err) => console.error("[ssn] Medicare/Medicaid migration failed:", err.message));
 
 module.exports = app;

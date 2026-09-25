@@ -1,5 +1,7 @@
 // src/lib/ssn.js
-// Field-level encryption for resident Social Security numbers.
+// Field-level encryption for resident Social Security numbers — and, with the
+// same key and format, their Medicare and Medicaid numbers (encryptField /
+// decryptField below).
 //
 // Stored in the existing residents.social_security_number column as
 //   enc:v1:<base64( iv(12) | authTag(16) | ciphertext )>
@@ -61,25 +63,47 @@ function last4(canonicalSsn) {
   return canonicalSsn.slice(-4);
 }
 
-function encryptSsn(plain, residentId) {
+function encrypt(plain, aad) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", getKey(), iv);
-  cipher.setAAD(Buffer.from(residentId));
+  cipher.setAAD(Buffer.from(aad));
   const ct = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   return PREFIX + Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64");
 }
 
 // Returns the plaintext, or null if nothing is stored. A value without the
 // enc:v1: prefix is a legacy plaintext row from before encryption existed and
-// is returned as-is (the startup migration in migrateLegacySsns rewrites those).
-function decryptSsn(stored, residentId) {
+// is returned as-is (the startup migrations below rewrite those).
+function decrypt(stored, aad) {
   if (!stored) return null;
   if (!isEncrypted(stored)) return stored;
   const buf = Buffer.from(stored.slice(PREFIX.length), "base64");
   const decipher = crypto.createDecipheriv("aes-256-gcm", getKey(), buf.subarray(0, 12));
-  decipher.setAAD(Buffer.from(residentId));
+  decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(buf.subarray(12, 28));
   return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8");
+}
+
+function encryptSsn(plain, residentId) {
+  return encrypt(plain, residentId);
+}
+
+function decryptSsn(stored, residentId) {
+  return decrypt(stored, residentId);
+}
+
+// Medicare / Medicaid numbers. Free text (formats vary by program and state),
+// so no normalizing beyond a trim. The field name is bound in alongside the
+// resident id, so a Medicare ciphertext pasted into the Medicaid column fails
+// to decrypt rather than showing up under the wrong label.
+const ENCRYPTED_ID_FIELDS = ["medicareNumber", "medicaidNumber"];
+
+function encryptField(plain, residentId, field) {
+  return encrypt(plain, `${residentId}:${field}`);
+}
+
+function decryptField(stored, residentId, field) {
+  return decrypt(stored, `${residentId}:${field}`);
 }
 
 // Idempotent one-time upgrade for rows saved before encryption existed: any
@@ -114,6 +138,28 @@ async function migrateLegacySsns(prisma) {
   return { migrated, skipped, keyMissing: false };
 }
 
+// Same idea as migrateLegacySsns, for Medicare/Medicaid numbers saved before
+// they were encrypted. Idempotent; a no-op without a key.
+async function migrateLegacyInsuranceIds(prisma) {
+  if (!keyConfigured()) return { migrated: 0, keyMissing: true };
+  let migrated = 0;
+  for (const field of ENCRYPTED_ID_FIELDS) {
+    const rows = await prisma.resident.findMany({
+      where: { [field]: { not: null }, NOT: { [field]: { startsWith: PREFIX } } },
+      select: { id: true, [field]: true }, // explicit select overrides the client-wide omit
+    });
+    for (const row of rows) {
+      const value = row[field].trim();
+      await prisma.resident.update({
+        where: { id: row.id },
+        data: { [field]: value ? encryptField(value, row.id, field) : null },
+      });
+      migrated++;
+    }
+  }
+  return { migrated, keyMissing: false };
+}
+
 module.exports = {
   SsnKeyError,
   SsnFormatError,
@@ -123,5 +169,9 @@ module.exports = {
   last4,
   encryptSsn,
   decryptSsn,
+  ENCRYPTED_ID_FIELDS,
+  encryptField,
+  decryptField,
   migrateLegacySsns,
+  migrateLegacyInsuranceIds,
 };

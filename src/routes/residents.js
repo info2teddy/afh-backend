@@ -20,6 +20,47 @@ async function employeeHomeFilter(req) {
   return assignedHomeIds(prisma, req.employeeId);
 }
 
+// Fields a caregiver's own login never receives: identifiers and billing,
+// none of which their screens use ("minimum necessary"). Clinical fields —
+// diagnosis, allergies, DNR, contacts — stay, since those matter for care.
+// Medicare/Medicaid/SSN ciphertext is already omitted client-wide.
+const HIDDEN_FROM_EMPLOYEE = [
+  "socialSecurityLast4",
+  "supplementaryInsurance",
+  "payerType",
+  "medicaidSplitPct",
+  "authorizationStatus",
+  "qboCustomerId",
+];
+
+function forRole(req, resident) {
+  if (req.userRole !== "employee") return resident;
+  const trimmed = { ...resident };
+  for (const field of HIDDEN_FROM_EMPLOYEE) delete trimmed[field];
+  return trimmed;
+}
+
+// Per-query override of the client-wide omit (middleware/tenant.js), for the
+// two responses that feed the face sheet.
+const WITH_INSURANCE_IDS = Object.fromEntries(ssn.ENCRYPTED_ID_FIELDS.map((f) => [f, false]));
+
+// Swaps the stored Medicare/Medicaid ciphertext for plaintext. A value that
+// won't decrypt (wrong or missing key) comes back as null and is logged —
+// never the ciphertext, which would otherwise be saved back as if it were
+// the number.
+function decryptInsuranceIds(resident) {
+  const out = { ...resident };
+  for (const field of ssn.ENCRYPTED_ID_FIELDS) {
+    try {
+      out[field] = ssn.decryptField(resident[field], resident.id, field);
+    } catch (err) {
+      console.error(`[ssn] could not decrypt ${field} for resident ${resident.id}: ${err.message}`);
+      out[field] = null;
+    }
+  }
+  return out;
+}
+
 // Fixed set of face-sheet contact "slots" — see ResidentContact in
 // schema.prisma. Kept as a plain array (not a Prisma enum) to match this
 // schema's existing convention.
@@ -44,7 +85,7 @@ router.get("/", async (req, res) => {
     where: { tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) }, // never omit tenantId
     orderBy: { name: "asc" },
   });
-  res.json(residents);
+  res.json(residents.map((r) => forRole(req, r)));
 });
 
 // GET /residents/:id — a single resident, still scoped to tenant (and, for
@@ -60,12 +101,15 @@ router.get("/:id", async (req, res) => {
       ...(homeIds && { homeId: { in: homeIds } }),
     },
     include: { contacts: true, home: { select: { name: true, address: true, phone: true, fax: true } } },
+    // Caregivers never get Medicare/Medicaid numbers; everyone else gets them
+    // decrypted, for the face sheet.
+    ...(req.userRole !== "employee" && { omit: WITH_INSURANCE_IDS }),
   });
 
   if (!resident) {
     return res.status(404).json({ error: "Resident not found." });
   }
-  res.json(resident);
+  res.json(req.userRole === "employee" ? forRole(req, resident) : decryptInsuranceIds(resident));
 });
 
 // POST /residents — create a resident under the current tenant
@@ -389,6 +433,18 @@ router.put("/:id/face-sheet", async (req, res) => {
     ssnData.socialSecurityLast4 = null;
   }
 
+  // Medicare/Medicaid: encrypted like the SSN, but the form shows them in full,
+  // so the usual "blank clears it" still applies. Fail closed without a key.
+  const insuranceIds = { medicareNumber, medicaidNumber };
+  const insuranceData = {};
+  for (const field of ssn.ENCRYPTED_ID_FIELDS) {
+    const value = typeof insuranceIds[field] === "string" ? insuranceIds[field].trim() : "";
+    if (value && !ssn.keyConfigured()) {
+      return res.status(503).json({ error: "Saving Medicare and Medicaid numbers isn't set up on the server yet. Ask CareFit support." });
+    }
+    insuranceData[field] = value ? ssn.encryptField(value, resident.id, field) : null;
+  }
+
   await prisma.resident.update({
     where: { id: resident.id },
     data: {
@@ -396,8 +452,7 @@ router.put("/:id/face-sheet", async (req, res) => {
       ...ssnData,
       dnrStatus: dnrStatus || null,
       advancedDirectivesType: advancedDirectivesType || null,
-      medicareNumber: medicareNumber || null,
-      medicaidNumber: medicaidNumber || null,
+      ...insuranceData,
       supplementaryInsurance: supplementaryInsurance || null,
       diagnosis: diagnosis || null,
       allergies: allergies || null,
@@ -440,8 +495,9 @@ router.put("/:id/face-sheet", async (req, res) => {
   const withContacts = await prisma.resident.findUnique({
     where: { id: resident.id },
     include: { contacts: true, home: { select: { name: true, address: true, phone: true, fax: true } } },
+    omit: WITH_INSURANCE_IDS,
   });
-  res.json(withContacts);
+  res.json(decryptInsuranceIds(withContacts));
 });
 
 // GET /residents/:id/social-security-number — the ONE place the full number is
