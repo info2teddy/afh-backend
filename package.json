@@ -6,7 +6,8 @@
     "dev": "node src/app.js",
     "seed": "node prisma/seed.js",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "test": "node --test test/*.test.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

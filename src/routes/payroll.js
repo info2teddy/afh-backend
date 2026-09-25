@@ -1,7 +1,7 @@
 // src/routes/payroll.js
 const express = require("express");
 const { prisma, requireAdmin } = require("../middleware/tenant");
-const { evaluateWeeklyHours } = require("../lib/overtimeFlagging");
+const { payPeriodRange, evaluatePayPeriod, grossPay, round2 } = require("../lib/payrollCalc");
 const { getValidAccessToken } = require("../lib/quickbooksAuth");
 const { pushTimeActivity } = require("../lib/quickbooksClient");
 const router = express.Router();
@@ -11,51 +11,6 @@ const router = express.Router();
 // and QuickBooks. Applies to every route below.
 router.use(requireAdmin);
 
-// FLSA overtime is calculated per WORKWEEK, not per pay period — a biweekly
-// or semi-monthly payroll run must evaluate each Mon-Sun week separately and
-// sum the results, or overtime gets badly overstated for anyone whose hours
-// vary between weeks (confirmed by test-payroll.js: a 30hr/45hr split across
-// two weeks was reported as 35 OT hours instead of the correct 5).
-function groupShiftsByWorkweek(shifts) {
-  const weeks = new Map();
-  for (const shift of shifts) {
-    const clockIn = new Date(shift.clockIn);
-    const day = clockIn.getUTCDay();
-    const mondayOffset = day === 0 ? -6 : 1 - day;
-    const monday = new Date(clockIn);
-    monday.setUTCDate(monday.getUTCDate() + mondayOffset);
-    monday.setUTCHours(0, 0, 0, 0);
-    const key = monday.toISOString().slice(0, 10);
-
-    if (!weeks.has(key)) weeks.set(key, []);
-    weeks.get(key).push(shift);
-  }
-  return [...weeks.values()];
-}
-
-function evaluatePayPeriod(shifts) {
-  const weeklyGroups = groupShiftsByWorkweek(shifts);
-  let regularHours = 0;
-  let overtimeHours = 0;
-  const flags = [];
-  const shiftBreakdown = [];
-
-  for (const weekShifts of weeklyGroups) {
-    const result = evaluateWeeklyHours(weekShifts);
-    regularHours += result.regularHours;
-    overtimeHours += result.overtimeHours;
-    flags.push(...result.flags);
-    shiftBreakdown.push(...result.shiftBreakdown);
-  }
-
-  return {
-    regularHours: round2(regularHours),
-    overtimeHours: round2(overtimeHours),
-    flags,
-    shiftBreakdown,
-  };
-}
-
 // POST /payroll/runs — build a payroll run from all approved, unpaid shifts in a period
 // body: { periodStart: "2026-08-03", periodEnd: "2026-08-16" }
 router.post("/runs", async (req, res) => {
@@ -64,14 +19,26 @@ router.post("/runs", async (req, res) => {
     return res.status(400).json({ error: "periodStart and periodEnd are required." });
   }
 
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd) || periodEnd < periodStart) {
+    return res.status(400).json({ error: "Pay period dates must be YYYY-MM-DD, with the end on or after the start." });
+  }
+
+  // Stored as the chosen calendar dates (labels). The shifts they cover are
+  // picked by payPeriodRange: Pacific time, both dates included.
   const start = new Date(periodStart);
   const end = new Date(periodEnd);
 
-  const existingRun = await prisma.payrollRun.findFirst({
-    where: { tenantId: req.tenantId, payPeriodStart: start },
+  // Any overlap, not just the same start date — otherwise "Sep 1–15" followed
+  // by "Sep 10–24" would pay Sep 10–15 twice.
+  const overlappingRun = await prisma.payrollRun.findFirst({
+    where: { tenantId: req.tenantId, payPeriodStart: { lte: end }, payPeriodEnd: { gte: start } },
+    select: { payPeriodStart: true, payPeriodEnd: true },
   });
-  if (existingRun) {
-    return res.status(409).json({ error: "A payroll run already exists for this pay period." });
+  if (overlappingRun) {
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    return res.status(409).json({
+      error: `This overlaps an existing payroll run (${fmt(overlappingRun.payPeriodStart)} to ${fmt(overlappingRun.payPeriodEnd)}).`,
+    });
   }
 
   const employees = await prisma.employee.findMany({
@@ -97,7 +64,7 @@ router.post("/runs", async (req, res) => {
         tenantId: req.tenantId,
         employeeId: employee.id,
         approved: true,
-        clockIn: { gte: start, lt: end },
+        clockIn: payPeriodRange(periodStart, periodEnd),
         clockOut: { not: null },
       },
       include: { home: true },
@@ -114,17 +81,14 @@ router.post("/runs", async (req, res) => {
       }))
     );
 
-    const hourlyRate = Number(employee.payRate);
-    const grossPay = round2(
-      evaluated.regularHours * hourlyRate + evaluated.overtimeHours * hourlyRate * 1.5
-    );
-    totalGrossPay += grossPay;
+    const pay = grossPay(evaluated, Number(employee.payRate));
+    totalGrossPay += pay;
 
     lineItems.push({
       employeeId: employee.id,
       regularHours: evaluated.regularHours,
       overtimeHours: evaluated.overtimeHours,
-      grossPay,
+      grossPay: pay,
     });
   }
 
@@ -201,9 +165,5 @@ router.patch("/runs/:id/submit", async (req, res) => {
   // to know which employees need manual attention in QuickBooks.
   res.json({ ...updated, warnings: errors });
 });
-
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
 
 module.exports = router;

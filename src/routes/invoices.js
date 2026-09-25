@@ -3,6 +3,7 @@ const express = require("express");
 const { prisma } = require("../middleware/tenant");
 const { getValidAccessToken } = require("../lib/quickbooksAuth");
 const { pushInvoice } = require("../lib/quickbooksClient");
+const { computeInvoice } = require("../lib/invoiceCalc");
 const router = express.Router();
 
 // GET /invoices?residentId=... — list invoices, optionally filtered by resident
@@ -53,28 +54,7 @@ router.post("/generate", async (req, res) => {
 
   const start = new Date(periodStart);
   const end = new Date(periodEnd);
-  const daysInPeriod = Math.round((end - start) / 86400000) + 1;
-
-  // Proration: how many of those days did the resident actually live there
-  const effectiveStart = resident.moveInDate > start ? resident.moveInDate : start;
-  const effectiveEnd = resident.moveOutDate && resident.moveOutDate < end ? resident.moveOutDate : end;
-  const daysPresent = Math.max(Math.round((effectiveEnd - effectiveStart) / 86400000) + 1, 0);
-
-  const baseMonthly = Number(rate.roomAndBoardRate) + Number(rate.monthlyRate);
-  const proratedTotal = round2(baseMonthly * (daysPresent / daysInPeriod));
-
-  const lineItems = [];
-  if (resident.payerType === "private_pay") {
-    lineItems.push({ description: "Room & board and care charges (private pay)", amount: proratedTotal, lineType: "private_pay_portion" });
-  } else if (resident.payerType === "medicaid") {
-    lineItems.push({ description: "Room & board and care charges (Medicaid)", amount: proratedTotal, lineType: "medicaid_portion" });
-  } else {
-    const medicaidPct = Number(resident.medicaidSplitPct) / 100;
-    const medicaidAmt = round2(proratedTotal * medicaidPct);
-    const privateAmt = round2(proratedTotal - medicaidAmt);
-    lineItems.push({ description: `Medicaid portion (${resident.medicaidSplitPct}%)`, amount: medicaidAmt, lineType: "medicaid_portion" });
-    lineItems.push({ description: `Private pay portion (${100 - Number(resident.medicaidSplitPct)}%)`, amount: privateAmt, lineType: "private_pay_portion" });
-  }
+  const { total: proratedTotal, lineItems } = computeInvoice(resident, rate, start, end);
 
   const invoice = await prisma.invoice.create({
     data: {
@@ -168,9 +148,5 @@ router.delete("/:id", async (req, res) => {
   await prisma.invoice.delete({ where: { id: invoice.id } });
   res.status(204).end();
 });
-
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
 
 module.exports = router;
