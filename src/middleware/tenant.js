@@ -13,7 +13,7 @@ const { PrismaClient } = require("@prisma/client");
 // migrations in lib/ssn.js) opt back in by naming the column in an explicit
 // `select`, or with a per-query `omit: { field: false }`.
 const prisma = new PrismaClient({
-  omit: { resident: { socialSecurityNumber: true, medicareNumber: true, medicaidNumber: true } },
+  omit: { resident: { socialSecurityNumber: true, medicareNumber: true, medicaidNumber: true, photoData: true } },
 });
 
 const JWT_SECRET = process.env.JWT_SECRET;

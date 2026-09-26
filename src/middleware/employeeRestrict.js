@@ -16,6 +16,7 @@
 const ALLOWED_EMPLOYEE_ROUTES = [
   { method: "GET", pattern: /^\/residents$/ },
   { method: "GET", pattern: /^\/residents\/[^/]+$/ },
+  { method: "GET", pattern: /^\/residents\/[^/]+\/photo$/ }, // read-only; home-scoped in the route
   { method: "GET", pattern: /^\/residents\/[^/]+\/notes$/ },
   { method: "POST", pattern: /^\/residents\/[^/]+\/notes$/ },
   { method: "GET", pattern: /^\/residents\/[^/]+\/adl$/ },

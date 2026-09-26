@@ -178,6 +178,20 @@ model Resident {
   supplementaryInsurance String?   @map("supplementary_insurance")
   diagnosis              String?   @db.Text
   allergies              String?   @db.Text
+  // Day-to-day care facts shown on the resident cards, detail panel and
+  // compare view; entered on the face sheet. Free text except fallRisk.
+  diet                   String?
+  mobility               String?
+  fallRisk               String?   @map("fall_risk") // low | moderate | high
+  cognition              String?   @db.Text // cognition & communication (e.g. "Amharic speaker; needs cues")
+  // Resident photo (for recognising residents, and medication ID). Resized
+  // in the browser before upload, so rows stay small. photoData is omitted
+  // from every query (middleware/tenant.js) and only served by
+  // GET /residents/:id/photo; photoUpdatedAt says whether one exists and
+  // doubles as a cache key.
+  photoData              Bytes?    @map("photo_data")
+  photoMimeType          String?   @map("photo_mime_type")
+  photoUpdatedAt         DateTime? @map("photo_updated_at")
   // Stamped by PUT /residents/:id/face-sheet so the printed sheet can carry a
   // "Last updated" line. Without it a reprinted sheet is indistinguishable
   // from the stale copy already in the binder — staff can't tell which is
@@ -863,7 +877,7 @@ model ResidentAccessLog {
   userId     String?  @map("user_id")
   userEmail  String?  @map("user_email")
   userRole   String?  @map("user_role")
-  action     String // view | ssn_reveal | face_sheet_update | status_change | care_plan_generate | care_plan_document_view
+  action     String // view | ssn_reveal | face_sheet_update | status_change | care_plan_generate | care_plan_document_view | photo_update
   createdAt  DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)

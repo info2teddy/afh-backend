@@ -10,6 +10,8 @@ const { prisma } = require("../middleware/tenant");
 
 // Opening a profile fires several reads (profile, face sheet panel, print
 // page), so repeat views by the same person within this window count once.
+// Actions: view | ssn_reveal | face_sheet_update | status_change |
+// care_plan_generate | care_plan_document_view | photo_update
 const VIEW_DEDUPE_MS = 10 * 60 * 1000;
 
 async function write(req, residentId, action) {

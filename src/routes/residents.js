@@ -3,6 +3,7 @@
 // the pattern every other route file (employees, invoices, shifts) follows.
 
 const express = require("express");
+const multer = require("multer");
 const { prisma } = require("../middleware/tenant");
 const ssn = require("../lib/ssn");
 const { assignedHomeIds } = require("../lib/employeeScope");
@@ -62,6 +63,20 @@ function decryptInsuranceIds(resident) {
   return out;
 }
 
+const FALL_RISKS = ["low", "moderate", "high"];
+
+// Photos are resized in the browser (ResidentPhotoUpload) before they get
+// here; the cap just stops anything unreasonable.
+const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!PHOTO_TYPES.includes(file.mimetype)) return cb(new Error("Photos must be JPEG, PNG or WEBP."));
+    cb(null, true);
+  },
+});
+
 // Fixed set of face-sheet contact "slots" — see ResidentContact in
 // schema.prisma. Kept as a plain array (not a Prisma enum) to match this
 // schema's existing convention.
@@ -85,6 +100,7 @@ router.get("/", async (req, res) => {
   const residents = await prisma.resident.findMany({
     where: { tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) }, // never omit tenantId
     orderBy: { name: "asc" },
+    include: { home: { select: { name: true } } }, // the cards group by home
   });
   res.json(residents.map((r) => forRole(req, r)));
 });
@@ -409,6 +425,15 @@ router.put("/:id/face-sheet", async (req, res) => {
   if (dnrStatus && !["yes", "no"].includes(dnrStatus)) {
     return res.status(400).json({ error: 'dnrStatus must be "yes" or "no".' });
   }
+  if (req.body.fallRisk && !FALL_RISKS.includes(req.body.fallRisk)) {
+    return res.status(400).json({ error: `fallRisk must be one of: ${FALL_RISKS.join(", ")}` });
+  }
+  // Newer fields change only when sent, so a browser still running the
+  // previous version of the form can't blank them out on save.
+  const careFacts = {};
+  for (const field of ["diet", "mobility", "fallRisk", "cognition"]) {
+    if (field in req.body) careFacts[field] = typeof req.body[field] === "string" && req.body[field].trim() ? req.body[field].trim() : null;
+  }
 
   // SSN: three cases, never a silent overwrite. The UI only ever holds the last
   // four digits, so it can't send the number back — "not provided" must mean
@@ -459,6 +484,7 @@ router.put("/:id/face-sheet", async (req, res) => {
       supplementaryInsurance: supplementaryInsurance || null,
       diagnosis: diagnosis || null,
       allergies: allergies || null,
+      ...careFacts,
       // Stamped on every save so the printed sheet can show "Last updated" —
       // see the field comment in schema.prisma. Set here rather than via
       // @updatedAt so that unrelated writes (discharge, QBO id sync) don't
@@ -530,6 +556,53 @@ router.get("/:id/social-security-number", async (req, res) => {
     logAccess(req, resident.id, "ssn_reveal");
   }
   res.json({ socialSecurityNumber: value });
+});
+
+// GET /residents/:id/photo — the photo itself, for any login that can see
+// this resident (a caregiver only within their assigned homes). Private:
+// fetched with the login's token, never a public URL.
+router.get("/:id/photo", async (req, res) => {
+  const homeIds = await employeeHomeFilter(req);
+  const resident = await prisma.resident.findFirst({
+    where: { id: req.params.id, tenantId: req.tenantId, ...(homeIds && { homeId: { in: homeIds } }) },
+    select: { photoData: true, photoMimeType: true },
+  });
+  if (!resident || !resident.photoData) return res.status(404).json({ error: "No photo on file." });
+  res.set("Content-Type", resident.photoMimeType || "image/jpeg");
+  res.set("Cache-Control", "private, max-age=86400");
+  res.send(resident.photoData);
+});
+
+// PUT /residents/:id/photo — add or replace (managers/admins; a caregiver
+// login can't reach it, see employeeRestrict.js). multipart field "photo".
+router.put("/:id/photo", (req, res, next) => {
+  photoUpload.single("photo")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.code === "LIMIT_FILE_SIZE" ? "That photo is too large (2 MB max)." : err.message });
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Choose a photo to upload." });
+  const resident = await prisma.resident.findFirst({ where: { id: req.params.id, tenantId: req.tenantId }, select: { id: true } });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+  const updated = await prisma.resident.update({
+    where: { id: resident.id },
+    data: { photoData: req.file.buffer, photoMimeType: req.file.mimetype, photoUpdatedAt: new Date() },
+    select: { photoUpdatedAt: true },
+  });
+  logAccess(req, resident.id, "photo_update");
+  res.json(updated);
+});
+
+// DELETE /residents/:id/photo
+router.delete("/:id/photo", async (req, res) => {
+  const resident = await prisma.resident.findFirst({ where: { id: req.params.id, tenantId: req.tenantId }, select: { id: true } });
+  if (!resident) return res.status(404).json({ error: "Resident not found." });
+  await prisma.resident.update({
+    where: { id: resident.id },
+    data: { photoData: null, photoMimeType: null, photoUpdatedAt: null },
+  });
+  logAccess(req, resident.id, "photo_update");
+  res.json({ photoUpdatedAt: null });
 });
 
 // GET /residents/:id/access-log — who opened or changed this resident's
