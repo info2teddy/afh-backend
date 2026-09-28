@@ -4,7 +4,8 @@
 // from lib/adlDomains.js (the Negotiated Care Plan's own 9 ADL/assessment
 // domains, a different real document serving a different purpose: what's
 // prescribed vs. what was actually done each shift). Order matches the
-// paper form's own layout.
+// paper form's own layout, minus "Restraints Check", which the user asked to
+// remove (2026-09-28). Old entries with that domain stay in the database.
 //
 // Deliberately NOT modeled here: the form's per-resident "care profile"
 // settings (which bath type, which ambulation aid, feeds self vs. assisted,
@@ -25,7 +26,6 @@ const PERSONAL_CARE_TASKS = [
   "Incontinence Care",
   "Skin Care/Reposition",
   "Ambulation",
-  "Restraints Check",
   "Routine Resident Check",
   "Linen Change",
 ];
